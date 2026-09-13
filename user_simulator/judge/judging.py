@@ -26,11 +26,15 @@ def _check_keys(value: Any, keys: Iterable[str]) -> None:
 def _check_evidence(
     item: Mapping[str, Any], sources: Sequence[str], known: bool
 ) -> None:
-    """Checks that known measurements have nonempty, verbatim evidence."""
+    """Checks verbatim evidence for known values and no quotes for unknowns."""
     evidence = item["evidence"]
     if not isinstance(evidence, list) or (known and not evidence):
         raise MalformedLMJudgmentError(
             "Known measurements need evidence quotes"
+        )
+    if not known and evidence:
+        raise MalformedLMJudgmentError(
+            "Unknown measurements require empty evidence"
         )
     for quote in evidence:
         if not isinstance(quote, str) or not quote.strip():
@@ -109,6 +113,8 @@ def parse_lm_judgment(
     kind: judgments.JudgmentKind,
     sources: Sequence[str],
     rating_criteria: tuple[rating_scale.RatingAnchoredCriterion, ...],
+    *,
+    require_feedback: bool = False,
 ) -> judgments.LMJudgment:
     """Returns a validated LM judgment without claiming semantic correctness.
 
@@ -117,6 +123,7 @@ def parse_lm_judgment(
         kind: JudgmentKind.TASK or JudgmentKind.OUTPUT.
         sources: Allowed evidence texts; history only for task LM judgments.
         rating_criteria: Rating definitions from the selected user config.
+        require_feedback: Require brief feedback, retained in the raw call log.
 
     Returns:
         The parsed task or output ratings with supporting quotations.
@@ -125,6 +132,16 @@ def parse_lm_judgment(
         MalformedLMJudgmentError: JSON, schema, ranges, or quotes are invalid.
     """
     data = decode_lm_json(raw)
+    if require_feedback:
+        # Feedback stays in LMCallResult.raw for review. Only ratings and
+        # quantities enter the parsed judgment used to calculate a score.
+        feedback = data.pop("feedback", None)
+        if not isinstance(feedback, str) or not feedback.strip():
+            raise MalformedLMJudgmentError("Missing criterion feedback")
+        if len(feedback) > 400:
+            raise MalformedLMJudgmentError(
+                "Criterion feedback exceeds 400 characters"
+            )
     if kind is judgments.JudgmentKind.TASK:
         _check_keys(data, ("ratings", "quantities"))
         _check_keys(data["quantities"], ())
@@ -148,7 +165,10 @@ def parse_lm_judgment(
                         "Output rating must be a whole value from 0–4 or null"
                     )
             _check_evidence(item, sources, value is not None)
-        _check_keys(data["quantities"], output_definitions.COST_COMPONENTS)
+        _check_keys(data["quantities"], (
+            criterion.name for criterion in rating_criteria
+            if criterion.name in output_definitions.COST_COMPONENTS
+        ))
         for item in data["quantities"].values():
             _check_quantity(item, sources)
     else:

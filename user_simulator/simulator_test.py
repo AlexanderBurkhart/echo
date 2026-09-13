@@ -14,6 +14,7 @@ from user_simulator import test_utils
 from user_simulator.data import judgments
 from user_simulator.data import score_records
 from user_simulator.integration_tests import judge_evaluation
+from user_simulator.judge import prompts
 from user_simulator.judge.ratings import ratings as rating_scale
 
 
@@ -23,11 +24,13 @@ class _SequenceJudge:
     def __init__(self, responses: Iterable[str | Exception]) -> None:
         self.identity = test_utils.make_judge_identity()
         self.calls = []
+        self.schemas = []
         self._responses = iter(responses)
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, *, response_schema=None) -> str:
         """Returns the next fixture response and records the visible prompt."""
         self.calls.append(prompt)
+        self.schemas.append(response_schema)
         response = next(self._responses)
         if isinstance(response, Exception):
             raise response
@@ -48,8 +51,8 @@ class SimulatorTest(unittest.TestCase):
         self.task_raw = test_utils.serialize_lm_response(
             self.case.reference_task
         )
-        self.output_raw = test_utils.serialize_lm_response(
-            self.case.first.reference
+        self.output_responses = test_utils.serialize_criterion_responses(
+            self.case.first.reference, self.user.rating_criteria,
         )
 
     def _score(
@@ -63,8 +66,85 @@ class SimulatorTest(unittest.TestCase):
             use_cache=use_cache,
         )
 
+    def test_default_criteria_keep_calls_and_caches_isolated(self) -> None:
+        judge = _SequenceJudge([self.task_raw, *self.output_responses])
+        scorer = simulator.Simulator([self.user], judge)
+        expected = self._score(scorer)
+        self.assertEqual(len(judge.calls), 6)
+        self.assertIsNotNone(judge.schemas[0])
+        for index, criterion in enumerate(self.user.rating_criteria, 1):
+            self.assertEqual(judge.calls[index], prompts.build_criterion_prompt(
+                self.case.history, self.case.first.output, criterion,
+            ))
+            self.assertEqual(
+                {item.name for item in judge.schemas[index].ratings},
+                {criterion.name},
+            )
+            self.assertTrue(judge.schemas[index].require_feedback)
+        record = score_records.load_score_record(
+            next(self.root.glob("requests/*/score.json"))
+        )
+        self.assertEqual(len(record.output_lm_calls), 5)
+        self.assertEqual([call.prompt for call in record.output_lm_calls],
+                         judge.calls[1:])
+        for call, schema in zip(record.output_lm_calls, judge.schemas[1:]):
+            # Ordered schema fields survive canonical record serialization.
+            self.assertEqual(call.response_schema, schema)
+            self.assertEqual(
+                json.dumps(call.response_schema.build_json_schema()),
+                json.dumps(schema.build_json_schema()),
+            )
+        self.assertEqual(record.output_judgment.ratings,
+                         self.case.first.reference.ratings)
+        self.assertEqual(record.output_judgment.quantities,
+                         self.case.first.reference.quantities)
+        self.assertEqual(self._score(scorer), expected)
+        self.assertEqual(len(judge.calls), 6)
+        saved_records = (
+            score_records.load_score_record(path)
+            for path in self.root.glob("requests/*/score.json")
+        )
+        reused = next(item for item in saved_records if item.output_cache_hit)
+        self.assertTrue(reused.task_cache_hit)
+        self.assertEqual(reused.task_lm_calls, [])
+        self.assertEqual(reused.output_lm_calls, [])
+
+    def test_separate_retry_does_not_repeat_completed_criteria(self) -> None:
+        responses = self.output_responses
+        malformed = json.loads(responses[1])
+        criterion = self.user.rating_criteria[1]
+        malformed["ratings"][criterion.name]["value"] = 4
+        malformed["ratings"][criterion.name]["evidence"] = [
+            "invented evidence quotation",
+        ]
+        malformed_raw = json.dumps(malformed)
+        judge = _SequenceJudge([
+            self.task_raw, responses[0], malformed_raw, *responses[1:],
+        ])
+        scorer = simulator.Simulator([self.user], judge)
+        self._score(scorer)
+        self.assertEqual(len(judge.calls), 7)
+        self.assertEqual(judge.calls[2], prompts.build_criterion_prompt(
+            self.case.history, self.case.first.output, criterion,
+        ))
+        self.assertEqual(judge.calls[3], prompts.build_retry_prompt(
+            judge.calls[2], malformed_raw, "Evidence must quote supplied data",
+        ))
+        self.assertNotEqual(judge.calls[1], judge.calls[2])
+        for index, next_criterion in enumerate(self.user.rating_criteria[2:], 4):
+            self.assertEqual(judge.calls[index], prompts.build_criterion_prompt(
+                self.case.history, self.case.first.output, next_criterion,
+            ))
+        record = score_records.load_score_record(
+            next(self.root.glob("requests/*/score.json"))
+        )
+        self.assertEqual(sum(call.error is not None
+                             for call in record.output_lm_calls), 1)
+        self.assertEqual([call.prompt for call in record.output_lm_calls],
+                         judge.calls[1:])
+
     def test_one_score_records_all_private_diagnostics(self) -> None:
-        judge = _SequenceJudge([self.task_raw, self.output_raw])
+        judge = _SequenceJudge([self.task_raw, *self.output_responses])
         scorer = simulator.Simulator([self.user], judge)
         score = self._score(scorer)
         self.assertIsInstance(score, float)
@@ -94,24 +174,27 @@ class SimulatorTest(unittest.TestCase):
         self.assertEqual(saved.judge, judge.identity)
         self.assertIs(scorer._identity, judge.identity)
         self.assertEqual(saved.task_lm_calls[0].raw, self.task_raw)
-        self.assertEqual(saved.output_lm_calls[0].raw, self.output_raw)
+        self.assertEqual(saved.output_lm_calls[0].raw, self.output_responses[0])
         self.assertIsNone(saved.task_lm_calls[0].error)
         self.assertIsNone(saved.output_lm_calls[0].error)
         self.assertEqual(saved.task_prompt, judge.calls[0])
-        self.assertEqual(saved.output_prompt, judge.calls[1])
+        self.assertEqual([call.prompt for call in saved.output_lm_calls],
+                         judge.calls[1:])
+        self.assertEqual([call.raw for call in saved.output_lm_calls],
+                         self.output_responses)
         self.assertEqual(saved.task_judgment.source_record, str(path.resolve()))
         self.assertEqual(list(path.parent.iterdir()), [path])
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_lm_caches_survive_restart_and_scores_use_each_user(self) -> None:
-        judge = _SequenceJudge([self.task_raw, self.output_raw])
+        judge = _SequenceJudge([self.task_raw, *self.output_responses])
         scorer = simulator.Simulator([self.user], judge)
         baseline = self._score(scorer)
         self.assertEqual(self._score(scorer), baseline)
         other = dataclasses.replace(
             self.user, user_id="different_user",
             rules=(dataclasses.replace(
-                self.user.rules[1], weights={"money": 1},
+                self.user.rules[1], weights={"external_resource_demand": 1},
             ),),
         )
         scorer = simulator.Simulator([other], judge)
@@ -121,7 +204,7 @@ class SimulatorTest(unittest.TestCase):
             conversation_history=self.case.history,
             output=self.case.first.output,
         )
-        self.assertEqual(len(judge.calls), 2)
+        self.assertEqual(len(judge.calls), 6)
         self.assertNotEqual(other_score, baseline)
         saved = [
             score_records.load_score_record(path)
@@ -134,17 +217,17 @@ class SimulatorTest(unittest.TestCase):
         self.assertEqual(reused.output_lm_calls, [])
 
     def test_cache_bypass_ignores_existing_entry(self) -> None:
-        judge = _SequenceJudge([self.task_raw, self.output_raw] * 3)
+        judge = _SequenceJudge([self.task_raw, *self.output_responses] * 3)
         scorer = simulator.Simulator([self.user], judge)
         self._score(scorer)
         self._score(scorer, use_cache=False)
         self._score(scorer, use_cache=False)
-        self.assertEqual(len(judge.calls), 6)
+        self.assertEqual(len(judge.calls), 18)
         self.assertEqual(len(list(self.root.glob("task_cache/*.json"))), 1)
         self.assertEqual(len(list(self.root.glob("output_cache/*.json"))), 1)
 
     def test_bypass_does_not_create_cache(self) -> None:
-        judge = _SequenceJudge([self.task_raw, self.output_raw])
+        judge = _SequenceJudge([self.task_raw, *self.output_responses])
         self._score(
             simulator.Simulator([self.user], judge),
             use_cache=False,
@@ -165,7 +248,7 @@ class SimulatorTest(unittest.TestCase):
                 },
             ), self.user.rules[1]),
         )
-        judge = _SequenceJudge([self.task_raw, self.output_raw] * 2)
+        judge = _SequenceJudge([self.task_raw, *self.output_responses] * 2)
         scorer = simulator.Simulator([private], judge)
         first = self._score(scorer, use_cache=False)
         self.assertIs(scorer._users[private.user_id], private)
@@ -198,10 +281,21 @@ class SimulatorTest(unittest.TestCase):
         )
 
     def test_output_retry_retains_task_assessment(self) -> None:
-        judge = _SequenceJudge([self.task_raw, "{", "bad", self.output_raw])
+        judge = _SequenceJudge([
+            self.task_raw, "{", "bad", *self.output_responses,
+        ])
         self._score(simulator.Simulator([self.user], judge))
-        self.assertEqual(len(judge.calls), 4)
-        self.assertEqual(judge.calls[1:], [judge.calls[1]] * 3)
+        self.assertEqual(len(judge.calls), 8)
+        saved = score_records.load_score_record(
+            next(self.root.glob("requests/*/score.json"))
+        )
+        for index, raw in enumerate(("{", "bad"), 2):
+            self.assertEqual(judge.calls[index], prompts.build_retry_prompt(
+                judge.calls[1], raw, saved.output_lm_calls[index - 2].error,
+            ))
+        self.assertNotIn('"previous_response": "{"', judge.calls[3])
+        self.assertEqual(saved.task_judgment.ratings,
+                         self.case.reference_task.ratings)
 
     def test_runtime_failure_is_not_retried(self) -> None:
         judge = _SequenceJudge([RuntimeError("runtime unavailable")])
@@ -219,17 +313,19 @@ class SimulatorTest(unittest.TestCase):
             item.value = 0
             item.evidence = [self.case.first.output]
         judge = _SequenceJudge([
-            self.task_raw, test_utils.serialize_lm_response(output)
+            self.task_raw, *test_utils.serialize_criterion_responses(
+                output, self.user.rating_criteria,
+            )
         ])
         scorer = simulator.Simulator([self.user], judge)
         score = self._score(scorer)
         self.assertEqual(score, 0)
-        self.assertEqual(len(judge.calls), 2)
+        self.assertEqual(len(judge.calls), 6)
 
     def test_identity_change_invalidates_cache_and_is_frozen_per_instance(
         self,
     ) -> None:
-        judge = _SequenceJudge([self.task_raw, self.output_raw] * 2)
+        judge = _SequenceJudge([self.task_raw, *self.output_responses] * 2)
         scorer = simulator.Simulator([self.user], judge)
         self._score(scorer)
         judge.identity = dataclasses.replace(
@@ -242,7 +338,7 @@ class SimulatorTest(unittest.TestCase):
         self.assertEqual(len(list(self.root.glob("output_cache/*.json"))), 2)
 
     def test_history_change_invalidates_cache(self) -> None:
-        judge = _SequenceJudge([self.task_raw, self.output_raw] * 2)
+        judge = _SequenceJudge([self.task_raw, *self.output_responses] * 2)
         scorer = simulator.Simulator([self.user], judge)
         self._score(scorer)
         scorer.score(
@@ -257,7 +353,7 @@ class SimulatorTest(unittest.TestCase):
             ),
             output=self.case.first.output,
         )
-        self.assertEqual(len(judge.calls), 4)
+        self.assertEqual(len(judge.calls), 12)
 
     def test_extra_preference_uses_rating_criteria_in_user_config(self) -> None:
         rule = dataclasses.replace(
@@ -280,17 +376,20 @@ class SimulatorTest(unittest.TestCase):
             evidence=[self.case.first.output],
         )
         judge = _SequenceJudge([
-            self.task_raw, test_utils.serialize_lm_response(output),
+            self.task_raw, *test_utils.serialize_criterion_responses(
+                output, user.rating_criteria,
+            ),
         ])
         scorer = simulator.Simulator(
             [user], judge,
         )
         score = self._score(scorer)
         self.assertGreater(score, 0)
-        self.assertIn(
-            '"extra":{"0":"a","1":"b","2":"c","3":"d","4":"e"}',
-            judge.calls[1],
-        )
+        self.assertEqual(len(judge.calls), 7)
+        self.assertEqual(judge.calls[-1], prompts.build_criterion_prompt(
+            self.case.history, self.case.first.output, user.rating_criteria[-1],
+        ))
+        self.assertIn("CRITERION: extra", judge.calls[-1])
         saved = score_records.load_score_record(
             next(self.root.glob("requests/*/score.json"))
         )
@@ -307,7 +406,7 @@ class SimulatorTest(unittest.TestCase):
                 anchors=criterion.anchors[:4] + ("CUSTOM_RATING_DESCRIPTION",),
             ),) + self.user.rating_criteria[1:],
         )
-        judge = _SequenceJudge([self.task_raw, self.output_raw] * 2)
+        judge = _SequenceJudge([self.task_raw, *self.output_responses] * 2)
         scorer = simulator.Simulator([self.user, other], judge)
         self._score(scorer)
         scorer.score(
@@ -316,9 +415,9 @@ class SimulatorTest(unittest.TestCase):
             conversation_history=self.case.history,
             output=self.case.first.output,
         )
-        self.assertEqual(len(judge.calls), 4)
+        self.assertEqual(len(judge.calls), 12)
         self.assertNotIn("CUSTOM_RATING_DESCRIPTION", judge.calls[1])
-        self.assertIn("CUSTOM_RATING_DESCRIPTION", judge.calls[3])
+        self.assertIn("CUSTOM_RATING_DESCRIPTION", judge.calls[7])
 
     def test_duplicate_user_id_is_rejected_during_initialization(self) -> None:
         judge = _SequenceJudge([])
@@ -334,7 +433,7 @@ class SimulatorTest(unittest.TestCase):
         self.assertEqual(judge.calls, [])
 
     def test_scoring_selects_the_run_without_a_logger_object(self) -> None:
-        judge = _SequenceJudge([self.task_raw, self.output_raw] * 2)
+        judge = _SequenceJudge([self.task_raw, *self.output_responses] * 2)
         scorer = simulator.Simulator([self.user], judge)
         first_root = self.run_log.root / "first"
         second_root = self.run_log.root / "second"
@@ -346,14 +445,14 @@ class SimulatorTest(unittest.TestCase):
                 conversation_history=self.case.history,
                 output=self.case.first.output,
             )
-        self.assertEqual(len(judge.calls), 4)
+        self.assertEqual(len(judge.calls), 12)
         first = json.loads((first_root / "run.json").read_text())
         second = json.loads((second_root / "run.json").read_text())
         self.assertNotEqual(first["run_id"], second["run_id"])
 
     def test_corrupt_task_cache_requests_and_reuses_replacement(self) -> None:
         judge = _SequenceJudge([
-            self.task_raw, self.output_raw, self.task_raw,
+            self.task_raw, *self.output_responses, self.task_raw,
         ])
         scorer = simulator.Simulator([self.user], judge)
         baseline = self._score(scorer)
@@ -372,16 +471,18 @@ class SimulatorTest(unittest.TestCase):
         self.assertIs(saved.task_cache_hit, False)
         self.assertIs(saved.output_cache_hit, True)
         self.assertEqual(self._score(scorer), baseline)
-        self.assertEqual(len(judge.calls), 3)
-        self.assertEqual(judge.calls[0], judge.calls[2])
+        self.assertEqual(len(judge.calls), 7)
+        self.assertEqual(judge.calls[0], judge.calls[6])
 
     def test_changed_output_reuses_task_but_requests_new_lm_assessment(
         self,
     ) -> None:
-        second_raw = test_utils.serialize_lm_response(
-            self.case.second.reference
+        second_responses = test_utils.serialize_criterion_responses(
+            self.case.second.reference, self.user.rating_criteria,
         )
-        judge = _SequenceJudge([self.task_raw, self.output_raw, second_raw])
+        judge = _SequenceJudge([
+            self.task_raw, *self.output_responses, *second_responses,
+        ])
         scorer = simulator.Simulator([self.user], judge)
         self._score(scorer)
         for _ in range(2):
@@ -391,13 +492,13 @@ class SimulatorTest(unittest.TestCase):
                 conversation_history=self.case.history,
                 output=self.case.second.output,
             )
-        self.assertEqual(len(judge.calls), 3)
+        self.assertEqual(len(judge.calls), 11)
         self.assertEqual(len(list(self.root.glob("task_cache/*.json"))), 1)
         self.assertEqual(len(list(self.root.glob("output_cache/*.json"))), 2)
 
     def test_corrupt_output_cache_requests_and_reuses_replacement(self) -> None:
         judge = _SequenceJudge([
-            self.task_raw, self.output_raw, self.output_raw,
+            self.task_raw, *self.output_responses, *self.output_responses,
         ])
         scorer = simulator.Simulator([self.user], judge)
         baseline = self._score(scorer)
@@ -416,18 +517,18 @@ class SimulatorTest(unittest.TestCase):
         saved = next(item for item in saved_records if item.output_cache_error)
         self.assertEqual(saved.output_invalid_cache, raw)
         self.assertIn("Evidence must quote", saved.output_cache_error)
-        self.assertEqual(saved.output_lm_calls[0].raw, self.output_raw)
+        self.assertEqual(saved.output_lm_calls[0].raw, self.output_responses[0])
         self.assertIs(saved.task_cache_hit, True)
         self.assertIsNone(saved.task_cache_error)
         self.assertIs(saved.output_cache_hit, False)
         self.assertEqual(self._score(scorer), baseline)
-        self.assertEqual(len(judge.calls), 3)
-        self.assertEqual(judge.calls[1], judge.calls[2])
+        self.assertEqual(len(judge.calls), 11)
+        self.assertEqual(judge.calls[1:6], judge.calls[6:])
 
     def test_invalid_cache_json_requests_fresh_lm_judgment(self) -> None:
         invalid_entries = ("{", "[]", "null")
         judge = _SequenceJudge([
-            self.task_raw, self.output_raw,
+            self.task_raw, *self.output_responses,
             *([self.task_raw] * len(invalid_entries)),
         ])
         scorer = simulator.Simulator([self.user], judge)
@@ -437,7 +538,7 @@ class SimulatorTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 path.write_text(raw, encoding="utf-8")
                 self.assertEqual(self._score(scorer), baseline)
-        self.assertEqual(len(judge.calls), 2 + len(invalid_entries))
+        self.assertEqual(len(judge.calls), 6 + len(invalid_entries))
         saved = [
             score_records.load_score_record(path)
             for path in self.root.glob("requests/*/score.json")
@@ -449,12 +550,12 @@ class SimulatorTest(unittest.TestCase):
         )
 
     def test_duplicate_cache_keys_request_and_reuse_replacement(self) -> None:
-        for kind, response in (
-            (judgments.JudgmentKind.TASK, self.task_raw),
-            (judgments.JudgmentKind.OUTPUT, self.output_raw),
+        for kind, responses in (
+            (judgments.JudgmentKind.TASK, [self.task_raw]),
+            (judgments.JudgmentKind.OUTPUT, self.output_responses),
         ):
             judge = _SequenceJudge([
-                self.task_raw, self.output_raw, response, response,
+                self.task_raw, *self.output_responses, *responses, *responses,
             ])
             scorer = simulator.Simulator([self.user], judge)
             baseline = self._score(scorer)
@@ -484,7 +585,10 @@ class SimulatorTest(unittest.TestCase):
                         )
                         self.assertFalse(saved.task_cache_hit)
                         self.assertTrue(saved.output_cache_hit)
-                        self.assertEqual(saved.task_lm_calls[0].raw, response)
+                        self.assertEqual(
+                            [call.raw for call in saved.task_lm_calls],
+                            responses,
+                        )
                     else:
                         saved = next(
                             item for item in saved_records
@@ -495,17 +599,24 @@ class SimulatorTest(unittest.TestCase):
                         )
                         self.assertFalse(saved.output_cache_hit)
                         self.assertTrue(saved.task_cache_hit)
-                        self.assertEqual(saved.output_lm_calls[0].raw, response)
-                    self.assertEqual(len(judge.calls), 3 + index)
+                        self.assertEqual(
+                            [call.raw for call in saved.output_lm_calls],
+                            responses,
+                        )
+                    self.assertEqual(
+                        len(judge.calls), 6 + (index + 1) * len(responses),
+                    )
                     self.assertEqual(self._score(scorer), baseline)
-                    self.assertEqual(len(judge.calls), 3 + index)
+                    self.assertEqual(
+                        len(judge.calls), 6 + (index + 1) * len(responses),
+                    )
             # Give the next judgment kind a fresh pair of caches.
             for cache_path in self.root.glob("*_cache/*.json"):
                 cache_path.unlink()
 
     def test_invalid_cache_recovery_uses_normal_lm_retry_limit(self) -> None:
         judge = _SequenceJudge([
-            self.task_raw, self.output_raw, "bad", "bad", "bad",
+            self.task_raw, *self.output_responses, "bad", "bad", "bad",
         ])
         scorer = simulator.Simulator([self.user], judge)
         self._score(scorer)
@@ -513,7 +624,7 @@ class SimulatorTest(unittest.TestCase):
         cache_path.write_text("{", encoding="utf-8")
         with self.assertRaises(simulator.JudgeError) as caught:
             self._score(scorer)
-        self.assertEqual(len(judge.calls), 5)
+        self.assertEqual(len(judge.calls), 9)
         self.assertTrue(caught.exception.diagnostics.exists())
         saved = score_records.load_score_record(caught.exception.diagnostics)
         self.assertEqual(
@@ -529,14 +640,14 @@ class SimulatorTest(unittest.TestCase):
 
     def test_failed_lm_output_assessment_is_not_cached(self) -> None:
         judge = _SequenceJudge([
-            self.task_raw, "bad", "bad", "bad", self.output_raw,
+            self.task_raw, "bad", "bad", "bad", *self.output_responses,
         ])
         scorer = simulator.Simulator([self.user], judge)
         with self.assertRaises(simulator.JudgeError):
             self._score(scorer)
         self.assertFalse((self.root / "output_cache").exists())
         self._score(scorer)
-        self.assertEqual(len(judge.calls), 5)
+        self.assertEqual(len(judge.calls), 9)
         self.assertEqual(len(list(self.root.glob("output_cache/*.json"))), 1)
 
 

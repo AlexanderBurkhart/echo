@@ -32,15 +32,17 @@ class _ReferenceJudge:
                 case.reference_task
             )
             for candidate in case.get_candidates():
-                prompt = prompts.build_output_prompt(
-                    case.history, candidate.output,
-                    output_definitions.DEFAULT_RATING_CRITERIA,
+                criteria = output_definitions.DEFAULT_RATING_CRITERIA
+                responses = test_utils.serialize_criterion_responses(
+                    candidate.reference, criteria,
                 )
-                self._lookup[prompt] = test_utils.serialize_lm_response(
-                    candidate.reference
-                )
+                for criterion, response in zip(criteria, responses):
+                    prompt = prompts.build_criterion_prompt(
+                        case.history, candidate.output, criterion,
+                    )
+                    self._lookup[prompt] = response
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, *, response_schema=None) -> str:
         """Returns the pre-authored reference for this exact prompt."""
         self.calls.append(prompt)
         return self._lookup[prompt]
@@ -119,7 +121,7 @@ class ValidationTest(unittest.TestCase):
             )
             self.assertEqual(report.status, "complete")
             self.assertIn("pending", report.human_review_status)
-            self.assertEqual(len(judge.calls), 12 * 3 * 4)
+            self.assertEqual(len(judge.calls), 12 * 3 * 2 * 6)
             self.assertFalse(list(pathlib.Path(directory).rglob("task_cache")))
             self.assertFalse(
                 list(pathlib.Path(directory).rglob("output_cache"))
@@ -143,9 +145,11 @@ class ValidationTest(unittest.TestCase):
         judge = _ReferenceJudge(bundle.cases)
         complete = judge.complete
 
-        def respond(prompt: str) -> str:
-            raw = complete(prompt)
-            return "invalid JSON" if len(judge.calls) <= 3 else raw
+        def respond(prompt: str, *, response_schema=None) -> str:
+            if len(judge.calls) < 3:
+                judge.calls.append(prompt)
+                return "invalid JSON"
+            return complete(prompt, response_schema=response_schema)
 
         with tempfile.TemporaryDirectory() as directory:
             with mock.patch.object(judge, "complete", side_effect=respond):
@@ -180,9 +184,12 @@ class ValidationTest(unittest.TestCase):
         bundle = judge_evaluation.load_cases(test_utils.CASES_PATH)
         judge = _ReferenceJudge(bundle.cases)
         case = bundle.cases[0]
-        prompt = prompts.build_output_prompt(
-            case.history, case.first.output,
-            output_definitions.DEFAULT_RATING_CRITERIA,
+        criterion = next(
+            item for item in output_definitions.DEFAULT_RATING_CRITERIA
+            if item.name == "urgency"
+        )
+        prompt = prompts.build_criterion_prompt(
+            case.history, case.first.output, criterion,
         )
         response = json.loads(judge._lookup[prompt])
         response["ratings"]["urgency"]["value"] = 3
@@ -192,7 +199,7 @@ class ValidationTest(unittest.TestCase):
                 judge, test_utils.CASES_PATH, directory,
             )
         self.assertEqual(report.status, "complete")
-        self.assertEqual(len(judge.calls), 12 * 3 * 4)
+        self.assertEqual(len(judge.calls), 12 * 3 * 2 * 6)
         self.assertFalse(report.cases[0].reference_ratings_match)
         self.assertTrue(report.cases[0].all_three_measurements_consistent)
         self.assertTrue(any(
@@ -204,8 +211,8 @@ class ValidationTest(unittest.TestCase):
     def test_threshold_and_level_sensitivity_detect_changes(self) -> None:
         result = judge_evaluation._evaluate_sensitivity(
             test_utils.make_conditional_user(), test_utils.make_task(79),
-            test_utils.make_ratings(urgency=4, money=0),
-            test_utils.make_ratings(urgency=0, money=4),
+            test_utils.make_ratings(urgency=4, external_resource_demand=0),
+            test_utils.make_ratings(urgency=0, external_resource_demand=4),
         )
         self.assertTrue(result.any_label_change)
         self.assertIn(

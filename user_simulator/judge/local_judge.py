@@ -2,7 +2,6 @@
 
 import dataclasses
 import hashlib
-import json
 import pathlib
 import platform
 import time
@@ -12,10 +11,10 @@ import llama_cpp
 
 from conversation import history
 from user_simulator.data import judge_identity
+from user_simulator.judge import response_schema
 from user_simulator.judge import runtime_settings
 
 HASH_BLOCK_BYTES = 1024 * 1024
-RESPONSE_SCHEMA_PATH = pathlib.Path(__file__).with_name("response_schema.json")
 
 
 def _compute_file_sha256(path: str | pathlib.Path) -> str:
@@ -75,15 +74,7 @@ class LocalLlamaJudge:
             runtime_settings.MODEL_OPTIONS,
             n_threads=threads, n_threads_batch=threads,
         )
-        self._generation = dict(
-            runtime_settings.GENERATION_OPTIONS,
-            response_format={
-                "type": runtime_settings.RESPONSE_FORMAT,
-                "schema": json.loads(
-                    RESPONSE_SCHEMA_PATH.read_text(encoding="utf-8")
-                ),
-            },
-        )
+        self._generation = dict(runtime_settings.GENERATION_OPTIONS)
         started = time.perf_counter()
         self._model = llama_cpp.Llama(
             model_path=str(path), **self._settings
@@ -111,7 +102,9 @@ class LocalLlamaJudge:
             raise
         self.last_response: dict[str, Any] | None = None
 
-    def complete(self, prompt: str) -> str:
+    def complete(
+        self, prompt: str, *, response_schema: response_schema.ResponseSchema,
+    ) -> str:
         """Returns raw LM judgment text after resetting the model context."""
         self._model.reset()
         # A single user turn uses the model's pinned GGUF chat template.
@@ -119,6 +112,10 @@ class LocalLlamaJudge:
             messages=[dataclasses.asdict(history.Message(
                 role=history.Role.USER, content=prompt,
             ))],
+            response_format={
+                "type": runtime_settings.RESPONSE_FORMAT,
+                "schema": response_schema.build_json_schema(),
+            },
             **self._generation,
         )
         return self.last_response["choices"][0]["message"]["content"]

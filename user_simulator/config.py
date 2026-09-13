@@ -96,11 +96,8 @@ class UserConfig:
             for index, anchor in enumerate(criterion.anchors):
                 _validate_nonempty_string(anchor, f"Rating anchors[{index}]")
         criterion_names = {criterion.name for criterion in self.rating_criteria}
-        if (
-            len(criterion_names) != len(self.rating_criteria)
-            or "user_cost" in criterion_names
-        ):
-            raise ValueError("Duplicate rating criteria or aggregate user_cost")
+        if len(criterion_names) != len(self.rating_criteria):
+            raise ValueError("Duplicate rating criteria")
         required = {
             criterion.name
             for criterion in output_definitions.DEFAULT_RATING_CRITERIA
@@ -186,21 +183,6 @@ def _sample_weights(
     return normalize_weights({name: 1.0 - generator.random() for name in names})
 
 
-def _expand_cost_weight(
-    weights: Mapping[str, float], shares: Mapping[str, float]
-) -> dict[str, float]:
-    """Distributes a sampled or legacy aggregate weight across cost ratings."""
-    direct = {
-        name: weight for name, weight in weights.items()
-        if name != "user_cost"
-    }
-    direct.update({
-        name: weights["user_cost"] * share
-        for name, share in normalize_weights(shares).items()
-    })
-    return direct
-
-
 def generate_users(
     seed: int = DEFAULT_SEED, count: int = DEFAULT_USER_COUNT
 ) -> list[UserConfig]:
@@ -212,24 +194,21 @@ def generate_users(
 
     Returns:
         Each user has one always-applicable rule and three conditional rules.
+        Every rule samples weights directly for all output criteria.
         Users are never rejected or resampled to force disagreement.
     """
     if type(seed) is not int or type(count) is not int or count <= 0:
         raise ValueError("Seed and positive user count must be integers")
     generator = random.Random(seed)
+    criterion_names = tuple(
+        criterion.name
+        for criterion in output_definitions.DEFAULT_RATING_CRITERIA
+    )
     users = []
     for index in range(count):
-        weights = _sample_weights(
-            generator, task_definitions.PREFERENCES
-        )
-        shares = _sample_weights(
-            generator, output_definitions.COST_COMPONENTS
-        )
-        # Preserve the seeded sampling distribution while storing only
-        # direct output weights in each preference rule.
         rules = [PreferenceRule(
             id="always", precedence=0, when=None,
-            weights=_expand_cost_weight(weights, shares),
+            weights=_sample_weights(generator, criterion_names),
         )]
         order = list(task_definitions.PREFERENCES)
         generator.shuffle(order)
@@ -242,10 +221,7 @@ def generate_users(
                     operator=ConditionOperator.GREATER,
                     threshold=generator.uniform(0, 100),
                 ),
-                weights=_expand_cost_weight(
-                    _sample_weights(generator, task_definitions.PREFERENCES),
-                    shares,
-                ),
+                weights=_sample_weights(generator, criterion_names),
             ))
         user = UserConfig(
             user_id=f"pilot_{index:02d}",
@@ -256,45 +232,27 @@ def generate_users(
 
 
 def parse_user(value: Mapping[str, Any]) -> UserConfig:
-    """Decodes a private user record at a JSON input boundary."""
-    rules = []
-    # Existing archived score records used separate baseline and cost weights.
-    # Convert those only when decoding JSON; live configs own all weights
-    # inside their rules.
-    legacy = "default_weights" in value
-    if legacy:
-        rules.append(PreferenceRule(
-            id="always", precedence=min(
-                (rule["precedence"] for rule in value["rules"]), default=1
-            ) - 1,
-            when=None,
-            weights=_expand_cost_weight(
-                value["default_weights"], value["cost_weights"]
-            ),
-        ))
-    for rule in value["rules"]:
-        condition = rule["when"]
-        rules.append(PreferenceRule(
+    """Decodes the current user configuration format at the JSON boundary."""
+    rules = tuple(
+        PreferenceRule(
             id=rule["id"], precedence=rule["precedence"],
             when=Condition(
-                property=condition["property"],
-                operator=ConditionOperator(condition["operator"]),
-                threshold=condition["threshold"],
-            ) if condition is not None else None,
-            weights=_expand_cost_weight(rule["weights"], value["cost_weights"])
-            if legacy else rule["weights"],
-        ))
+                property=rule["when"]["property"],
+                operator=ConditionOperator(rule["when"]["operator"]),
+                threshold=rule["when"]["threshold"],
+            ) if rule["when"] is not None else None,
+            weights=rule["weights"],
+        ) for rule in value["rules"]
+    )
     rating_criteria = output_definitions.DEFAULT_RATING_CRITERIA
     if "rating_criteria" in value:
         rating_criteria = tuple(
             rating_scale.RatingAnchoredCriterion(
                 name=item["name"], anchors=tuple(item["anchors"]),
-            )
-            for item in value["rating_criteria"]
+            ) for item in value["rating_criteria"]
         )
     return UserConfig(
-        user_id=value["user_id"], rules=tuple(rules),
-        rating_criteria=rating_criteria,
+        user_id=value["user_id"], rules=rules, rating_criteria=rating_criteria,
     )
 
 

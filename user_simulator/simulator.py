@@ -17,6 +17,8 @@ from user_simulator.data import judgments
 from user_simulator.judge import judge as judge_interface
 from user_simulator.judge import judging
 from user_simulator.judge import prompts
+from user_simulator.judge import response_schema
+from user_simulator.judge.ratings import ratings as rating_scale
 
 
 TASK_CACHE_DIRECTORY = "task_cache"
@@ -45,6 +47,7 @@ def _get_timestamp() -> str:
 class Simulator:
     """A single-process evaluator that returns only a numerical score.
 
+    Task conditions share one LM call; each output criterion has its own call.
     Successful LM assessments are cached across users and restarts. Scores
     are calculated from the measurements and each user's private configuration.
     Keep private run artifacts inaccessible to learners.
@@ -76,37 +79,84 @@ class Simulator:
     def _request_lm_judgment(
         self,
         kind: judgments.JudgmentKind,
-        prompt: str,
         sources: list[str],
         request_dir: pathlib.Path,
         score_record: score_records.ScoreRecord,
     ) -> None:
         """Stores the LM judgment and each call outcome in score_record."""
+        score_path = request_dir / "score.json"
+        criteria = score_record.user_config.rating_criteria
+        criteria_per_call = (
+            tuple((item,) for item in criteria)
+            if kind is judgments.JudgmentKind.OUTPUT
+            else (criteria,)
+        )
+        combined = judgments.LMJudgment(
+            ratings={}, source_record=str(score_path.resolve()),
+        )
+        for call_criteria in criteria_per_call:
+            request_prompt = score_record.task_prompt
+            if kind is judgments.JudgmentKind.OUTPUT:
+                # Each output criterion has its own prompt, saved on its call.
+                request_prompt = prompts.build_criterion_prompt(
+                    score_record.history, score_record.output, call_criteria[0],
+                )
+            self._request_lm_judgment_with_retries(
+                kind=kind, sources=sources, criteria=call_criteria,
+                request_prompt=request_prompt, score_path=score_path,
+                score_record=score_record, combined=combined,
+            )
+        if kind is judgments.JudgmentKind.TASK:
+            score_record.task_judgment = combined
+        else:
+            score_record.output_judgment = combined
+
+    def _request_lm_judgment_with_retries(
+        self,
+        *,
+        kind: judgments.JudgmentKind,
+        sources: list[str],
+        criteria: tuple[rating_scale.RatingAnchoredCriterion, ...],
+        request_prompt: str,
+        score_path: pathlib.Path,
+        score_record: score_records.ScoreRecord,
+        combined: judgments.LMJudgment,
+    ) -> None:
+        """Records attempts and adds a valid response to the combined judgment.
+
+        Retries malformed LM responses up to three total attempts. Runtime
+        errors fail immediately. Every attempt remains in the score record.
+        """
         calls = (
             score_record.task_lm_calls
             if kind is judgments.JudgmentKind.TASK
             else score_record.output_lm_calls
         )
-        score_path = request_dir / "score.json"
+        schema = response_schema.build_response_schema(kind, criteria)
+        original_prompt = request_prompt
         for _ in range(MAX_LM_JUDGMENT_ATTEMPTS):
             started = time.perf_counter()
-            call = score_records.LMCallResult()
+            call = score_records.LMCallResult(
+                prompt=request_prompt, response_schema=schema,
+            )
             try:
-                call.raw = self._judge.complete(prompt)
+                call.raw = self._judge.complete(
+                    request_prompt, response_schema=schema,
+                )
                 parsed = judging.parse_lm_judgment(
-                    call.raw, kind, sources,
-                    score_record.user_config.rating_criteria,
+                    call.raw, kind, sources, criteria,
+                    require_feedback=(
+                        kind is judgments.JudgmentKind.OUTPUT
+                    ),
                 )
-                judgment = judgments.build_lm_judgment(
-                    parsed, source_record=str(score_path.resolve())
-                )
-                if kind is judgments.JudgmentKind.TASK:
-                    score_record.task_judgment = judgment
-                else:
-                    score_record.output_judgment = judgment
-                return
+                combined.ratings.update(parsed.ratings)
+                combined.quantities.update(parsed.quantities)
+                break
             except judging.MalformedLMJudgmentError as error:
                 call.error = str(error)
+                request_prompt = prompts.build_retry_prompt(
+                    original_prompt, call.raw, call.error,
+                )
             except Exception as error:
                 call.error = f"{type(error).__name__}: {error}"
                 raise JudgeError(
@@ -115,16 +165,16 @@ class Simulator:
             finally:
                 call.elapsed_seconds = time.perf_counter() - started
                 calls.append(call)
-        raise JudgeError(
-            f"Malformed LM judgment after {MAX_LM_JUDGMENT_ATTEMPTS} "
-            "attempts; pause", score_path
-        )
+        else:
+            raise JudgeError(
+                f"Malformed LM judgment after {MAX_LM_JUDGMENT_ATTEMPTS} "
+                "attempts; pause", score_path,
+            )
 
     def _get_or_request_lm_assessment(
         self,
         *,
         kind: judgments.JudgmentKind,
-        prompt: str,
         sources: list[str],
         request_dir: pathlib.Path,
         cache_path: pathlib.Path,
@@ -162,17 +212,16 @@ class Simulator:
                     score_record.output_cache_error = cache_error
                     score_record.output_invalid_cache = raw
             else:
-                judgment = judgments.build_lm_judgment(parsed, source_record)
+                parsed.source_record = source_record
                 if kind is judgments.JudgmentKind.TASK:
-                    score_record.task_judgment = judgment
+                    score_record.task_judgment = parsed
                     score_record.task_cache_hit = True
                 else:
-                    score_record.output_judgment = judgment
+                    score_record.output_judgment = parsed
                     score_record.output_cache_hit = True
                 return
         self._request_lm_judgment(
             kind=kind,
-            prompt=prompt,
             sources=sources,
             request_dir=request_dir,
             score_record=score_record,
@@ -222,7 +271,9 @@ class Simulator:
         if not isinstance(output, str) or not output.strip():
             raise ValueError("Output must be a nonempty readable string")
         user = self._users[user_id]
-        prompt_hash = prompts.compute_prompt_fingerprint(user.rating_criteria)
+        prompt_hash = prompts.compute_prompt_fingerprint(
+            user.rating_criteria,
+        )
         namespace = records.compute_digest(score_records.JudgeNamespace(
             judge=self._identity, prompts=prompt_hash,
         ))
@@ -253,16 +304,12 @@ class Simulator:
             output_cache_key=output_key,
             timestamp=_get_timestamp(),
             task_prompt=prompts.build_task_prompt(conversation_history),
-            output_prompt=prompts.build_output_prompt(
-                conversation_history, output, user.rating_criteria
-            ),
         )
         try:
             # Reuse the LM's general task-condition judgments, which determine
             # the preference weights selected for this user.
             self._get_or_request_lm_assessment(
                 kind=judgments.JudgmentKind.TASK,
-                prompt=score_record.task_prompt,
                 sources=sources,
                 request_dir=request_dir,
                 cache_path=task_cache_path,
@@ -274,7 +321,6 @@ class Simulator:
             # rubrics; code combines them with the user's weights below.
             self._get_or_request_lm_assessment(
                 kind=judgments.JudgmentKind.OUTPUT,
-                prompt=score_record.output_prompt,
                 sources=sources + [output],
                 request_dir=request_dir,
                 cache_path=output_cache_path,

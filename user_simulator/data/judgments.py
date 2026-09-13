@@ -31,10 +31,3 @@ class LMJudgment:
     ratings: dict[str, Rating]
     quantities: dict[str, Rating] = dataclasses.field(default_factory=dict)
     source_record: str | None = None
-
-
-def build_lm_judgment(
-    parsed: LMJudgment, source_record: str | None = None
-) -> LMJudgment:
-    """Attaches source provenance directly to parsed LM measurements."""
-    return dataclasses.replace(parsed, source_record=source_record)

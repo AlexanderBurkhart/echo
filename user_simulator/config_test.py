@@ -10,6 +10,7 @@ from experiment_logging import records
 from user_simulator import config
 from user_simulator import test_utils
 from user_simulator.judge import prompts
+from user_simulator.judge.ratings import output_definitions
 
 
 class ConfigTest(unittest.TestCase):
@@ -22,8 +23,22 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(len(first), 8)
         for index, user in enumerate(first):
             self.assertEqual(user.user_id, f"pilot_{index:02d}")
+            self.assertEqual(
+                {
+                    rule.when.property for rule in user.rules
+                    if rule.when is not None
+                },
+                {"urgency", "uncertainty", "resource_constraints"},
+            )
             weights = [rule.weights for rule in user.rules]
             for group in weights:
+                self.assertEqual(
+                    set(group),
+                    {
+                        "urgency", "uncertainty", "external_resource_demand",
+                        "user_time", "effort",
+                    },
+                )
                 self.assertTrue(all(value > 0 for value in group.values()))
                 self.assertAlmostEqual(sum(group.values()), 1)
             self.assertTrue(any(rule.when is None for rule in user.rules))
@@ -46,12 +61,56 @@ class ConfigTest(unittest.TestCase):
             saved_user = json.loads((path / "user0.json").read_text())
             self.assertNotIn("default_weights", saved_user)
             self.assertNotIn("cost_weights", saved_user)
+            self.assertEqual(
+                {item["name"] for item in saved_user["rating_criteria"]},
+                {
+                    "urgency", "uncertainty", "external_resource_demand",
+                    "user_time", "effort",
+                },
+            )
             for rule in saved_user["rules"]:
+                self.assertNotIn("money", rule["weights"])
                 if rule["when"] is not None:
+                    self.assertNotEqual(rule["when"]["property"], "user_cost")
                     self.assertEqual(
                         set(rule["when"]),
                         {"property", "operator", "threshold"},
                     )
+
+    def test_generated_rules_do_not_share_fixed_resource_ratios(self) -> None:
+        user = config.generate_users()[0]
+        ratios = {
+            rule.weights["external_resource_demand"] / rule.weights["user_time"]
+            for rule in user.rules
+        }
+        self.assertEqual(len(ratios), len(user.rules))
+
+    def test_parse_user_preserves_authored_criteria_and_weights(self) -> None:
+        user = config.generate_users()[0]
+        criterion = dataclasses.replace(
+            user.rating_criteria[0], anchors=("zero", "one", "two", "three", "four"),
+        )
+        user = dataclasses.replace(
+            user, rating_criteria=(criterion,) + user.rating_criteria[1:],
+        )
+        payload = json.loads(records.serialize_canonical_json(user))
+        before = json.dumps(payload)
+        self.assertEqual(config.parse_user(payload), user)
+        self.assertEqual(json.dumps(payload), before)
+
+    def test_custom_criteria_use_the_same_name_and_weight_checks(self) -> None:
+        user = test_utils.make_conditional_user()
+        for name in ("resource_constraints", "custom_preference"):
+            with self.subTest(name=name):
+                criterion = dataclasses.replace(
+                    user.rating_criteria[0], name=name,
+                )
+                rule = dataclasses.replace(user.rules[1], weights={name: 1})
+                updated = dataclasses.replace(
+                    user, rules=(rule,),
+                    rating_criteria=user.rating_criteria + (criterion,),
+                )
+                self.assertEqual(updated.rules[0].weights, {name: 1})
 
     def test_identifiers_reject_nonstring_and_blank_values(self) -> None:
         user = test_utils.make_conditional_user()
@@ -129,7 +188,10 @@ class ConfigTest(unittest.TestCase):
         self,
     ) -> None:
         user = test_utils.make_conditional_user()
-        for weights in ({}, {"money": 0}, {"money": -1}, {"undefined": 1}):
+        for weights in (
+            {}, {"external_resource_demand": 0},
+            {"external_resource_demand": -1}, {"undefined": 1},
+        ):
             with self.subTest(weights=weights):
                 rule = dataclasses.replace(user.rules[1], weights=weights)
                 with self.assertRaises(ValueError):

@@ -86,8 +86,8 @@ class EngineTest(unittest.TestCase):
 
     def test_expected_conditional_preference_reversal(self) -> None:
         user = test_utils.make_conditional_user()
-        first = test_utils.make_ratings(urgency=4, money=0)
-        second = test_utils.make_ratings(urgency=0, money=4)
+        first = test_utils.make_ratings(urgency=4, external_resource_demand=0)
+        second = test_utils.make_ratings(urgency=0, external_resource_demand=4)
         for urgency, first_preferred in ((79, False), (81, True)):
             task = test_utils.make_task(urgency)
             first_score = engine.calculate_preference_score(
@@ -140,25 +140,32 @@ class EngineTest(unittest.TestCase):
     def test_cost_preferences_are_weighted_directly(self) -> None:
         user = test_utils.make_conditional_user()
         rule = dataclasses.replace(
-            user.rules[1], weights={"money": 1, "user_time": 2, "effort": 1},
+            user.rules[1], weights={
+                "external_resource_demand": 1, "user_time": 2, "effort": 1,
+            },
         )
         result = engine.calculate_preference_score(
             dataclasses.replace(user, rules=(rule,)), test_utils.make_task(),
-            test_utils.make_ratings(money=0, user_time=4, effort=2),
+            test_utils.make_ratings(
+                external_resource_demand=0, user_time=4, effort=2,
+            ),
         )
         self.assertEqual(result.score, 62.5)
         self.assertEqual(result.weights, dict(rule.weights))
-        self.assertNotIn("user_cost", result.component_values)
+        self.assertNotIn("resource_constraints", result.component_values)
 
     def test_inactive_preferences_do_not_change_score_or_denominator(
         self,
     ) -> None:
         user = test_utils.make_conditional_user()
         rule = dataclasses.replace(
-            user.rules[0], weights={"urgency": 2, "money": 0},
+            user.rules[0],
+            weights={"urgency": 2, "external_resource_demand": 0},
         )
         user = dataclasses.replace(user, rules=(rule, user.rules[1]))
-        ratings = test_utils.make_ratings(urgency=4, uncertainty=0, money=0)
+        ratings = test_utils.make_ratings(
+            urgency=4, uncertainty=0, external_resource_demand=0,
+        )
         result = engine.calculate_preference_score(
             user, test_utils.make_task(90), ratings,
         )

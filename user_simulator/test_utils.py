@@ -44,19 +44,19 @@ def make_task(
     return {
         "urgency": judgments.Rating(value, unit),
         "uncertainty": judgments.Rating(None, "rating_0_100"),
-        "user_cost": judgments.Rating(None, "rating_0_100"),
+        "resource_constraints": judgments.Rating(None, "rating_0_100"),
     }
 
 
 def make_ratings(
     urgency: int | None = 2,
     uncertainty: int | None = 2,
-    money: int | None = 2,
+    external_resource_demand: int | None = 2,
     user_time: int | None = 2,
     effort: int | None = 2,
 ) -> dict[str, judgments.Rating]:
     """Builds separate qualitative assessments for every pilot component."""
-    levels = (urgency, uncertainty, money, user_time, effort)
+    levels = (urgency, uncertainty, external_resource_demand, user_time, effort)
     return {
         criterion.name: judgments.Rating(
             level, rating_scale.OUTPUT_RATING_UNIT
@@ -79,11 +79,17 @@ def make_conditional_user() -> config.UserConfig:
                     operator=config.ConditionOperator.GREATER,
                     threshold=80,
                 ),
-                weights={"urgency": 0.8, "uncertainty": 0.1, "money": 0.1},
+                weights={
+                    "urgency": 0.8, "uncertainty": 0.1,
+                    "external_resource_demand": 0.1,
+                },
             ),
             config.PreferenceRule(
                 id="always", precedence=0, when=None,
-                weights={"urgency": 0.1, "uncertainty": 0.1, "money": 0.8},
+                weights={
+                    "urgency": 0.1, "uncertainty": 0.1,
+                    "external_resource_demand": 0.8,
+                },
             ),
         ),
     )
@@ -94,3 +100,27 @@ def serialize_lm_response(judgment: judgments.LMJudgment) -> str:
     payload = dataclasses.asdict(judgment)
     payload.pop("source_record")
     return records.serialize_canonical_json(payload)
+
+
+def serialize_criterion_responses(
+    judgment: judgments.LMJudgment,
+    criteria: tuple[rating_scale.RatingAnchoredCriterion, ...],
+) -> list[str]:
+    """Splits authored fixture ratings into separate LM output responses."""
+    responses = []
+    for criterion in criteria:
+        payload = {
+            "feedback": "Unit-test criterion explanation.",
+            "ratings": {
+                criterion.name: dataclasses.asdict(
+                    judgment.ratings[criterion.name]
+                ),
+            },
+            "quantities": {
+                criterion.name: dataclasses.asdict(
+                    judgment.quantities[criterion.name]
+                ),
+            } if criterion.name in judgment.quantities else {},
+        }
+        responses.append(records.serialize_canonical_json(payload))
+    return responses
