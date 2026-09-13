@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+.venv/
+artifacts/
+config/users/
+models/
+
+# Private agent instructions, working notes, and release handoffs.
+.agent_context/
+.codex/
+.agents/
+AGENTS.md
+AGENT-PROMPT.txt
+PROJECT_MEMORY*.md
+
+# Historical planning notes now kept under .agent_context/.
+/PILOT_TODO.md
+/RESEARCH_ROADMAP.md
+/docs/decisions.md
+/docs/open-questions.md
+/docs/project-design.md
+/docs/research/report-source.md
+/docs/research/reward-model-method-review.md
+
+# Scratch documentation beside local helper scripts is not public research docs.
+/temp/**/*.md
+
+# Local lint configuration is not part of the public source.
+.pylintrc
