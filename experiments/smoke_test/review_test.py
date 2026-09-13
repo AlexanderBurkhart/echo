@@ -3,6 +3,7 @@
 import dataclasses
 import unittest
 
+from conversation import history
 from experiments.smoke_test import cases
 from experiments.smoke_test import review
 from user_simulator import config
@@ -16,7 +17,13 @@ class SmokeReviewTest(unittest.TestCase):
     """Checks that the smoke report exposes incorrect ratings and scores."""
 
     def setUp(self) -> None:
-        self.case = cases.CASES[0]
+        self.case = cases.SmokeCase(
+            name="example", history=history.ConversationHistory(),
+            output="Send now and keep revisions possible.",
+            expected_rule="prefer_speed_when_urgent",
+            expected_ratings={"urgency": 4, "uncertainty": 4},
+            explanation="Immediate and adaptable.",
+        )
         user = config.UserConfig(
             user_id="smoke_test",
             rules=(
@@ -25,7 +32,7 @@ class SmokeReviewTest(unittest.TestCase):
                     weights={"urgency": 0.5, "uncertainty": 0.5},
                 ),
                 config.PreferenceRule(
-                    id=cases.EXPECTED_RULE, precedence=1,
+                    id=self.case.expected_rule, precedence=1,
                     when=config.Condition(
                         property="urgency",
                         operator=config.ConditionOperator.GREATER_EQUAL,
@@ -40,7 +47,7 @@ class SmokeReviewTest(unittest.TestCase):
             test_utils.make_ratings(urgency=4, uncertainty=4)
         )
         self.record = score_records.ScoreRecord(
-            user_id=user.user_id, history=cases.CONVERSATION_HISTORY,
+            user_id=user.user_id, history=self.case.history,
             output=self.case.output, judge=test_utils.make_judge_identity(),
             prompt_hash="test-prompt", user_config=user,
             task_cache_key="test-task", timestamp="test-time",
@@ -70,6 +77,21 @@ class SmokeReviewTest(unittest.TestCase):
             "Returned score differs from manual arithmetic.", failures
         )
 
+    def test_equal_score_does_not_hide_incorrect_active_ratings(self) -> None:
+        case = dataclasses.replace(
+            self.case, expected_ratings={"urgency": 3, "uncertainty": 0}
+        )
+        self.record.output_judgment.ratings["urgency"].value = 2
+        self.record.output_judgment.ratings["uncertainty"].value = 4
+        self.record.result = engine.calculate_preference_score(
+            self.record.user_config, self.record.task_judgment.ratings,
+            self.record.output_judgment.ratings,
+        )
+        _, failures = review.review_output(case, self.record, 60)
+        self.assertIn("LM urgency rating was 2; expected 3.", failures)
+        self.assertIn("LM uncertainty rating was 4; expected 0.", failures)
+        self.assertFalse(any("Score differs" in error for error in failures))
+
     def test_reports_wrong_rule_weights_and_returned_score(self) -> None:
         self.record.result = dataclasses.replace(
             self.record.result, selected_rule="always",
@@ -83,7 +105,8 @@ class SmokeReviewTest(unittest.TestCase):
             "Logged weights differ from the expected config rule.", failures
         )
         self.assertIn(
-            f"Expected rule {cases.EXPECTED_RULE} was not selected.", failures
+            f"Expected rule {self.case.expected_rule} was not selected.",
+            failures,
         )
 
     def test_reports_unknown_rating_instead_of_silently_accepting_it(

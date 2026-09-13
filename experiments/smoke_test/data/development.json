@@ -1,0 +1,450 @@
+[
+  {
+    "description": "Prefer speed under time pressure; otherwise favor flexibility.",
+    "user": {
+      "user_id": "dev_speed",
+      "rules": [
+        {
+          "id": "usual_preference",
+          "precedence": 0,
+          "when": null,
+          "weights": {
+            "urgency": 0.3,
+            "uncertainty": 0.7
+          }
+        },
+        {
+          "id": "conditional_preference",
+          "precedence": 1,
+          "when": {
+            "property": "urgency",
+            "operator": ">=",
+            "threshold": 75
+          },
+          "weights": {
+            "urgency": 0.8,
+            "uncertainty": 0.2
+          }
+        }
+      ]
+    },
+    "cases": [
+      {
+        "name": "send_and_update",
+        "history": [
+          {
+            "role": "user",
+            "content": "The exhibition invitation is approved and ready to send. I must send it in the next 4 minutes; missing this deadline cancels the opening. The room and attendance limit may change afterward. I need to be able to update the invitation and notify recipients about either change."
+          }
+        ],
+        "output": "Send the approved invitation immediately. Keep an editable copy. If the room or attendance limit changes, update the invitation and notify every original recipient.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 4,
+          "uncertainty": 4
+        },
+        "explanation": "Immediate delivery and an update path for both unsettled details."
+      },
+      {
+        "name": "extra_check",
+        "history": [
+          {
+            "role": "user",
+            "content": "The exhibition invitation is approved and ready to send. I must send it in the next 4 minutes; missing this deadline cancels the opening. The room and attendance limit may change afterward. I need to be able to update the invitation and notify recipients about either change."
+          }
+        ],
+        "output": "Spend 20 seconds reopening the already approved invitation, although no review is needed. Then send it with more than 3 minutes remaining. Keep an editable copy, update either changed detail, and notify the original recipients.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 3,
+          "uncertainty": 4
+        },
+        "explanation": "One short unnecessary check leaves ample time; all changes remain supported."
+      },
+      {
+        "name": "unnecessary_wait",
+        "history": [
+          {
+            "role": "user",
+            "content": "The exhibition invitation is approved and ready to send. I must send it in the next 4 minutes; missing this deadline cancels the opening. The room and attendance limit may change afterward. I need to be able to update the invitation and notify recipients about either change."
+          }
+        ],
+        "output": "Wait 90 seconds for inspiration even though the invitation is approved and needs no work. Then send it during the remaining 150 seconds. Retain an editable copy, update either changed detail, and notify all original recipients.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 2,
+          "uncertainty": 4
+        },
+        "explanation": "A meaningful unnecessary wait consumes part of the window, while a timely delivery plan remains."
+      },
+      {
+        "name": "partial_updates",
+        "history": [
+          {
+            "role": "user",
+            "content": "The exhibition invitation is approved and ready to send. I must send it in the next 4 minutes; missing this deadline cancels the opening. The room and attendance limit may change afterward. I need to be able to update the invitation and notify recipients about either change."
+          }
+        ],
+        "output": "Send the invitation now. Keep an editable copy and notify recipients if the room changes. If the attendance limit changes, leave the invitation unchanged and do not notify recipients.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 4,
+          "uncertainty": 2
+        },
+        "explanation": "Handles the room but deliberately omits the other stated substantive change."
+      },
+      {
+        "name": "unhurried_flexible",
+        "history": [
+          {
+            "role": "user",
+            "content": "The exhibition invitation is ready. There is no deadline and no consequence of waiting. The room and attendance limit are unsettled; I need revisions and notifications for either change."
+          }
+        ],
+        "output": "Send the ready invitation now. Keep an editable copy and notify recipients whenever either the room or attendance limit changes.",
+        "expected_rule": "usual_preference",
+        "expected_ratings": {
+          "urgency": 4,
+          "uncertainty": 4
+        },
+        "explanation": "No time pressure should select the usual flexibility preference; sending adds no delay."
+      }
+    ]
+  },
+  {
+    "description": "When requirements are unsettled, prioritize adaptability over ease of execution.",
+    "user": {
+      "user_id": "dev_flexibility",
+      "rules": [
+        {
+          "id": "usual_preference",
+          "precedence": 0,
+          "when": null,
+          "weights": {
+            "uncertainty": 0.35,
+            "effort": 0.65
+          }
+        },
+        {
+          "id": "conditional_preference",
+          "precedence": 1,
+          "when": {
+            "property": "uncertainty",
+            "operator": ">=",
+            "threshold": 60
+          },
+          "weights": {
+            "uncertainty": 0.85,
+            "effort": 0.15
+          }
+        }
+      ]
+    },
+    "cases": [
+      {
+        "name": "editable_catalog",
+        "history": [
+          {
+            "role": "user",
+            "content": "We are designing a shared catalog. Both the category names and whether entries can belong to multiple categories are undecided and likely to change. A footer icon may also change, but that is purely cosmetic. I need to accommodate these changes. The existing editor supports editable labels and multiple-category membership; leave the required editing effort explicit. There is no deadline."
+          }
+        ],
+        "output": "Use the existing editable labels and multiple-category membership so both unsettled decisions can change. Keep the footer icon editable too. This requires one simple toggle from you; the existing editor handles the rest.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "uncertainty": 4,
+          "effort": 3
+        },
+        "explanation": "All named changes are supported; one simple user action is minor effort."
+      },
+      {
+        "name": "cosmetic_gap",
+        "history": [
+          {
+            "role": "user",
+            "content": "We are designing a shared catalog. Both the category names and whether entries can belong to multiple categories are undecided and likely to change. A footer icon may also change, but that is purely cosmetic. I need to accommodate these changes. The existing editor supports editable labels and multiple-category membership; leave the required editing effort explicit. There is no deadline."
+          }
+        ],
+        "output": "Keep category labels editable and allow multiple-category membership so either decision can change. Fix the cosmetic footer icon permanently. You only need to flip one simple toggle.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "uncertainty": 3,
+          "effort": 3
+        },
+        "explanation": "Only the explicitly cosmetic change lacks an update path; execution is one simple action."
+      },
+      {
+        "name": "structural_gap",
+        "history": [
+          {
+            "role": "user",
+            "content": "We are designing a shared catalog. Both the category names and whether entries can belong to multiple categories are undecided and likely to change. A footer icon may also change, but that is purely cosmetic. I need to accommodate these changes. The existing editor supports editable labels and multiple-category membership; leave the required editing effort explicit. There is no deadline."
+          }
+        ],
+        "output": "Keep category names and the footer icon editable. Permanently require each entry to have exactly one category, even if the membership requirement changes. Enable this with one simple toggle.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "uncertainty": 2,
+          "effort": 3
+        },
+        "explanation": "Supports some changes but locks in a substantive undecided requirement."
+      },
+      {
+        "name": "locked_catalog",
+        "history": [
+          {
+            "role": "user",
+            "content": "We are designing a shared catalog. Both the category names and whether entries can belong to multiple categories are undecided and likely to change. A footer icon may also change, but that is purely cosmetic. I need to accommodate these changes. The existing editor supports editable labels and multiple-category membership; leave the required editing effort explicit. There is no deadline."
+          }
+        ],
+        "output": "Treat all decisions as settled. Permanently lock the category names, single-category membership, and footer icon; no changes will be possible. The system applies this automatically with no user action.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "uncertainty": 0,
+          "effort": 4
+        },
+        "explanation": "Rejects all explicit uncertainty and makes changes impossible; no user effort is required."
+      },
+      {
+        "name": "settled_automatic",
+        "history": [
+          {
+            "role": "user",
+            "content": "All catalog requirements are final and will not change. I need an editable catalog anyway. The existing editor can configure it automatically, and there is no deadline."
+          }
+        ],
+        "output": "Use the existing editable catalog configuration. Although the requirements are final, retain editable labels and membership so revisions remain possible. The system performs setup automatically; you do not need to do anything.",
+        "expected_rule": "usual_preference",
+        "expected_ratings": {
+          "uncertainty": 4,
+          "effort": 4
+        },
+        "explanation": "Explicitly settled requirements select the usual rule; the proposal preserves edits at no user effort."
+      }
+    ]
+  },
+  {
+    "description": "When user resources are tight, protect user time while preserving changes.",
+    "user": {
+      "user_id": "dev_time",
+      "rules": [
+        {
+          "id": "usual_preference",
+          "precedence": 0,
+          "when": null,
+          "weights": {
+            "user_time": 0.4,
+            "uncertainty": 0.6
+          }
+        },
+        {
+          "id": "conditional_preference",
+          "precedence": 1,
+          "when": {
+            "property": "resource_constraints",
+            "operator": ">=",
+            "threshold": 60
+          },
+          "weights": {
+            "user_time": 0.8,
+            "uncertainty": 0.2
+          }
+        }
+      ]
+    },
+    "cases": [
+      {
+        "name": "automatic",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have a strict maximum of 10 minutes of personal attention for preparing workshop materials today; I cannot spend more. The topic order may change after preparation and the files need to remain editable. There is no delivery deadline. All work estimates below describe my own time, not computer runtime."
+          }
+        ],
+        "output": "Prepare the materials using the existing editable template. This requires no user time. Because the topic order may change, keep the sections reorderable and save the editable file.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "user_time": 4,
+          "uncertainty": 4
+        },
+        "explanation": "No user time is required. Adaptability is retained."
+      },
+      {
+        "name": "short",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have a strict maximum of 10 minutes of personal attention for preparing workshop materials today; I cannot spend more. The topic order may change after preparation and the files need to remain editable. There is no delivery deadline. All work estimates below describe my own time, not computer runtime."
+          }
+        ],
+        "output": "Prepare the materials using the existing editable template. This requires 1 minute of user time. Because the topic order may change, keep the sections reorderable and save the editable file.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "user_time": 3,
+          "uncertainty": 4
+        },
+        "explanation": "One minute is a small part of the stated ten-minute allowance. Adaptability is retained."
+      },
+      {
+        "name": "moderate",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have a strict maximum of 10 minutes of personal attention for preparing workshop materials today; I cannot spend more. The topic order may change after preparation and the files need to remain editable. There is no delivery deadline. All work estimates below describe my own time, not computer runtime."
+          }
+        ],
+        "output": "Prepare the materials using the existing editable template. This requires 5 minutes of user time. Because the topic order may change, keep the sections reorderable and save the editable file.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "user_time": 2,
+          "uncertainty": 4
+        },
+        "explanation": "Five minutes is a moderate share of the stated allowance. Adaptability is retained."
+      },
+      {
+        "name": "over_limit",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have a strict maximum of 10 minutes of personal attention for preparing workshop materials today; I cannot spend more. The topic order may change after preparation and the files need to remain editable. There is no delivery deadline. All work estimates below describe my own time, not computer runtime."
+          }
+        ],
+        "output": "Prepare the materials using the existing editable template. This requires 15 minutes of user time. Because the topic order may change, keep the sections reorderable and save the editable file.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "user_time": 1,
+          "uncertainty": 4
+        },
+        "explanation": "Fifteen minutes exceeds the explicit ten-minute limit. Adaptability is retained."
+      },
+      {
+        "name": "unconstrained_automatic",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have ample personal time for preparing workshop materials and no time or effort constraint. The topic order may change, so the material must remain editable. There is no deadline."
+          }
+        ],
+        "output": "The system prepares the materials automatically with no user time or effort. Because the topic order may change, save the editable file with reorderable sections.",
+        "expected_rule": "usual_preference",
+        "expected_ratings": {
+          "user_time": 4,
+          "uncertainty": 4
+        },
+        "explanation": "The history explicitly removes resource pressure, selecting the usual preference."
+      }
+    ]
+  },
+  {
+    "description": "Prefer low effort when resources are constrained, with speed as a secondary preference.",
+    "user": {
+      "user_id": "dev_effort",
+      "rules": [
+        {
+          "id": "usual_preference",
+          "precedence": 0,
+          "when": null,
+          "weights": {
+            "effort": 0.45,
+            "urgency": 0.55
+          }
+        },
+        {
+          "id": "conditional_preference",
+          "precedence": 1,
+          "when": {
+            "property": "resource_constraints",
+            "operator": ">=",
+            "threshold": 70
+          },
+          "weights": {
+            "effort": 0.75,
+            "urgency": 0.25
+          }
+        }
+      ]
+    },
+    "cases": [
+      {
+        "name": "automatic",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have almost no energy left for organizing these notes. My effort capacity is strictly limited to a few simple actions; complex manual reasoning is beyond what I can do today. The organization scheme is final. Start now; there is no external deadline. Describe what I would need to do."
+          }
+        ],
+        "output": "Begin organizing immediately, without waiting or adding preliminary steps. The system handles everything automatically; you take no action.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "effort": 4,
+          "urgency": 4
+        },
+        "explanation": "No effort. The proposal begins immediately."
+      },
+      {
+        "name": "one_action",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have almost no energy left for organizing these notes. My effort capacity is strictly limited to a few simple actions; complex manual reasoning is beyond what I can do today. The organization scheme is final. Start now; there is no external deadline. Describe what I would need to do."
+          }
+        ],
+        "output": "Begin organizing immediately, without waiting or adding preliminary steps. You press one clearly labeled button; the system handles the rest.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "effort": 3,
+          "urgency": 4
+        },
+        "explanation": "One simple action is minor effort. The proposal begins immediately."
+      },
+      {
+        "name": "several_decisions",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have almost no energy left for organizing these notes. My effort capacity is strictly limited to a few simple actions; complex manual reasoning is beyond what I can do today. The organization scheme is final. Start now; there is no external deadline. Describe what I would need to do."
+          }
+        ],
+        "output": "Begin organizing immediately, without waiting or adding preliminary steps. You manually compare several sample notes and choose matching categories in a multi-step review; this needs sustained but manageable concentration.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "effort": 2,
+          "urgency": 4
+        },
+        "explanation": "Several decisions and sustained concentration impose moderate effort. The proposal begins immediately."
+      },
+      {
+        "name": "complex_review",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have almost no energy left for organizing these notes. My effort capacity is strictly limited to a few simple actions; complex manual reasoning is beyond what I can do today. The organization scheme is final. Start now; there is no external deadline. Describe what I would need to do."
+          }
+        ],
+        "output": "Begin organizing immediately, without waiting or adding preliminary steps. You must carefully review every note, resolve many conflicting categories, and perform a long sequence of complex manual edits.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "effort": 1,
+          "urgency": 4
+        },
+        "explanation": "The proposal requires substantial complex user work. The proposal begins immediately."
+      },
+      {
+        "name": "unconstrained_automatic",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have plenty of energy, and complex work poses no effort constraint today. The note organization scheme is final. Start now; there is no external deadline."
+          }
+        ],
+        "output": "Begin immediately. The system organizes all notes automatically; you take no action.",
+        "expected_rule": "usual_preference",
+        "expected_ratings": {
+          "effort": 4,
+          "urgency": 4
+        },
+        "explanation": "The unconstrained task selects the usual speed/effort rule."
+      }
+    ]
+  }
+]

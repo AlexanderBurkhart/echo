@@ -1,0 +1,450 @@
+[
+  {
+    "description": "Prioritize reversibility when plans are unsettled, even with some time pressure.",
+    "user": {
+      "user_id": "holdout_reversible",
+      "rules": [
+        {
+          "id": "usual_preference",
+          "precedence": 0,
+          "when": null,
+          "weights": {
+            "urgency": 0.65,
+            "uncertainty": 0.35
+          }
+        },
+        {
+          "id": "conditional_preference",
+          "precedence": 1,
+          "when": {
+            "property": "uncertainty",
+            "operator": ">=",
+            "threshold": 55
+          },
+          "weights": {
+            "urgency": 0.15,
+            "uncertainty": 0.85
+          }
+        }
+      ]
+    },
+    "cases": [
+      {
+        "name": "flexible_rota",
+        "history": [
+          {
+            "role": "user",
+            "content": "The volunteer rota is ready to distribute in the next 8 minutes; later delivery will miss the coordinator briefing. Shift assignments and room allocations are still undecided and likely to change. The decorative header may also change, but it is unimportant. I need updates for all three."
+          }
+        ],
+        "output": "Distribute the rota now. Preserve an editable original and notify volunteers whenever assignments, rooms, or the decorative header change.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 4,
+          "uncertainty": 4
+        },
+        "explanation": "Immediate delivery with support for every named revision."
+      },
+      {
+        "name": "small_review",
+        "history": [
+          {
+            "role": "user",
+            "content": "The volunteer rota is ready to distribute in the next 8 minutes; later delivery will miss the coordinator briefing. Shift assignments and room allocations are still undecided and likely to change. The decorative header may also change, but it is unimportant. I need updates for all three."
+          }
+        ],
+        "output": "Spend 30 seconds checking the already approved rota once more, although no check is needed. Then distribute it with over 7 minutes left. Keep it editable and notify volunteers about changed assignments, rooms, or the header.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 3,
+          "uncertainty": 4
+        },
+        "explanation": "A brief needless review leaves ample margin and preserves all revisions."
+      },
+      {
+        "name": "cosmetic_exception",
+        "history": [
+          {
+            "role": "user",
+            "content": "The volunteer rota is ready to distribute in the next 8 minutes; later delivery will miss the coordinator briefing. Shift assignments and room allocations are still undecided and likely to change. The decorative header may also change, but it is unimportant. I need updates for all three."
+          }
+        ],
+        "output": "Distribute the rota immediately. Keep assignments and rooms editable and notify volunteers of their changes. Permanently lock only the unimportant decorative header.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 4,
+          "uncertainty": 3
+        },
+        "explanation": "Only the explicitly unimportant cosmetic change is unsupported."
+      },
+      {
+        "name": "rooms_only",
+        "history": [
+          {
+            "role": "user",
+            "content": "The volunteer rota is ready to distribute in the next 8 minutes; later delivery will miss the coordinator briefing. Shift assignments and room allocations are still undecided and likely to change. The decorative header may also change, but it is unimportant. I need updates for all three."
+          }
+        ],
+        "output": "Distribute immediately. Keep the room allocations editable and notify volunteers if rooms change, but permanently lock shift assignments even if they change. Leave the header editable.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 4,
+          "uncertainty": 2
+        },
+        "explanation": "A substantive unsettled choice remains locked while other revisions are supported."
+      },
+      {
+        "name": "settled_rota",
+        "history": [
+          {
+            "role": "user",
+            "content": "The volunteer rota and every requirement are settled and will not change. The editable file is ready. Distribute it in the next 8 minutes to reach the coordinator briefing."
+          }
+        ],
+        "output": "Distribute the rota immediately. Although the requirements are settled, retain the editable original and a way to notify volunteers if revisions become necessary.",
+        "expected_rule": "usual_preference",
+        "expected_ratings": {
+          "urgency": 4,
+          "uncertainty": 4
+        },
+        "explanation": "No unsettled requirements: use the usual speed preference."
+      }
+    ]
+  },
+  {
+    "description": "Favor simple execution when requirements are settled; otherwise protect adaptability.",
+    "user": {
+      "user_id": "holdout_low_uncertainty",
+      "rules": [
+        {
+          "id": "usual_preference",
+          "precedence": 0,
+          "when": null,
+          "weights": {
+            "effort": 0.2,
+            "uncertainty": 0.8
+          }
+        },
+        {
+          "id": "conditional_preference",
+          "precedence": 1,
+          "when": {
+            "property": "uncertainty",
+            "operator": "<=",
+            "threshold": 20
+          },
+          "weights": {
+            "effort": 0.85,
+            "uncertainty": 0.15
+          }
+        }
+      ]
+    },
+    "cases": [
+      {
+        "name": "automatic",
+        "history": [
+          {
+            "role": "user",
+            "content": "The podcast episode index has a final approved schema. There are no missing details, open decisions, or expected changes. I still want an editable index. There is no deadline or resource constraint. Tell me what I must do to set it up."
+          }
+        ],
+        "output": "The schema is settled, but keep the index fields editable and support rebuilding the index if changes are later needed. Setup runs automatically, requiring no user effort.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "effort": 4,
+          "uncertainty": 4
+        },
+        "explanation": "Automatic setup takes no user effort. The settled-task rule should activate."
+      },
+      {
+        "name": "simple",
+        "history": [
+          {
+            "role": "user",
+            "content": "The podcast episode index has a final approved schema. There are no missing details, open decisions, or expected changes. I still want an editable index. There is no deadline or resource constraint. Tell me what I must do to set it up."
+          }
+        ],
+        "output": "The schema is settled, but keep the index fields editable and support rebuilding the index if changes are later needed. You press one labeled button; setup then runs automatically.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "effort": 3,
+          "uncertainty": 4
+        },
+        "explanation": "One uncomplicated action is minor effort. The settled-task rule should activate."
+      },
+      {
+        "name": "moderate",
+        "history": [
+          {
+            "role": "user",
+            "content": "The podcast episode index has a final approved schema. There are no missing details, open decisions, or expected changes. I still want an editable index. There is no deadline or resource constraint. Tell me what I must do to set it up."
+          }
+        ],
+        "output": "The schema is settled, but keep the index fields editable and support rebuilding the index if changes are later needed. You compare several examples and manually map the schema fields in a multi-step setup that requires moderate concentration.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "effort": 2,
+          "uncertainty": 4
+        },
+        "explanation": "Several manual decisions require moderate effort. The settled-task rule should activate."
+      },
+      {
+        "name": "heavy",
+        "history": [
+          {
+            "role": "user",
+            "content": "The podcast episode index has a final approved schema. There are no missing details, open decisions, or expected changes. I still want an editable index. There is no deadline or resource constraint. Tell me what I must do to set it up."
+          }
+        ],
+        "output": "The schema is settled, but keep the index fields editable and support rebuilding the index if changes are later needed. You must manually inspect hundreds of records, resolve complex mapping conflicts, and perform extensive detailed edits.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "effort": 1,
+          "uncertainty": 4
+        },
+        "explanation": "Extensive complex manual work is substantial effort. The settled-task rule should activate."
+      },
+      {
+        "name": "unsettled_index",
+        "history": [
+          {
+            "role": "user",
+            "content": "The podcast episode index schema is undecided and likely to change. Field names and relationships are both unsettled. I need editable fields and relationships. There is no deadline."
+          }
+        ],
+        "output": "Keep both fields and relationships editable because the schema is unsettled. Support rebuilding the index after changes. Setup is fully automatic and requires no user action.",
+        "expected_rule": "usual_preference",
+        "expected_ratings": {
+          "effort": 4,
+          "uncertainty": 4
+        },
+        "explanation": "High uncertainty must fall back to the usual adaptability preference."
+      }
+    ]
+  },
+  {
+    "description": "Prioritize delivery under deadline pressure, otherwise minimize user time.",
+    "user": {
+      "user_id": "holdout_deadline_vs_time",
+      "rules": [
+        {
+          "id": "usual_preference",
+          "precedence": 0,
+          "when": null,
+          "weights": {
+            "urgency": 0.2,
+            "user_time": 0.8
+          }
+        },
+        {
+          "id": "conditional_preference",
+          "precedence": 1,
+          "when": {
+            "property": "urgency",
+            "operator": ">=",
+            "threshold": 80
+          },
+          "weights": {
+            "urgency": 0.7,
+            "user_time": 0.3
+          }
+        }
+      ]
+    },
+    "cases": [
+      {
+        "name": "automatic_release",
+        "history": [
+          {
+            "role": "user",
+            "content": "The approved reading list must be released in the next 6 minutes or the live session cannot start. It is ready now and nothing needs checking. I can spend at most 4 minutes of my own time on the release. All content is settled; there are no expected changes."
+          }
+        ],
+        "output": "Release the approved list immediately. This runs automatically and requires no user time.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 4,
+          "user_time": 4
+        },
+        "explanation": "Immediate release without any user time."
+      },
+      {
+        "name": "one_short_check",
+        "history": [
+          {
+            "role": "user",
+            "content": "The approved reading list must be released in the next 6 minutes or the live session cannot start. It is ready now and nothing needs checking. I can spend at most 4 minutes of my own time on the release. All content is settled; there are no expected changes."
+          }
+        ],
+        "output": "Spend 20 seconds of your time reopening the already approved list, although no check is needed. Release it immediately afterward with over 5 minutes before the deadline.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 3,
+          "user_time": 3
+        },
+        "explanation": "A small needless check leaves ample margin and costs little user time."
+      },
+      {
+        "name": "longer_check",
+        "history": [
+          {
+            "role": "user",
+            "content": "The approved reading list must be released in the next 6 minutes or the live session cannot start. It is ready now and nothing needs checking. I can spend at most 4 minutes of my own time on the release. All content is settled; there are no expected changes."
+          }
+        ],
+        "output": "Spend 2 minutes of your own time rereading the already approved list even though no review is needed. Then release it with 4 minutes remaining before the deadline.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 2,
+          "user_time": 2
+        },
+        "explanation": "A meaningful unnecessary review uses half the user-time allowance while preserving a timely plan."
+      },
+      {
+        "name": "missed_release",
+        "history": [
+          {
+            "role": "user",
+            "content": "The approved reading list must be released in the next 6 minutes or the live session cannot start. It is ready now and nothing needs checking. I can spend at most 4 minutes of my own time on the release. All content is settled; there are no expected changes."
+          }
+        ],
+        "output": "Wait until tomorrow to release the list, even though this prevents the live session from starting. The release runs automatically with no user time.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "urgency": 0,
+          "user_time": 4
+        },
+        "explanation": "Explicitly defeats timing while requiring no user time."
+      },
+      {
+        "name": "unhurried_release",
+        "history": [
+          {
+            "role": "user",
+            "content": "The approved reading list has no deadline and waiting causes no harm. My personal time allowance is 4 minutes. The content is settled and ready."
+          }
+        ],
+        "output": "Release the ready list immediately through automatic processing that requires no user time.",
+        "expected_rule": "usual_preference",
+        "expected_ratings": {
+          "urgency": 4,
+          "user_time": 4
+        },
+        "explanation": "No deadline pressure selects the usual user-time preference."
+      }
+    ]
+  },
+  {
+    "description": "Under tight resource constraints, balance user time and effort rather than speed.",
+    "user": {
+      "user_id": "holdout_shared_burden",
+      "rules": [
+        {
+          "id": "usual_preference",
+          "precedence": 0,
+          "when": null,
+          "weights": {
+            "user_time": 0.25,
+            "effort": 0.75
+          }
+        },
+        {
+          "id": "conditional_preference",
+          "precedence": 1,
+          "when": {
+            "property": "resource_constraints",
+            "operator": ">=",
+            "threshold": 65
+          },
+          "weights": {
+            "user_time": 0.65,
+            "effort": 0.35
+          }
+        }
+      ]
+    },
+    "cases": [
+      {
+        "name": "automatic_archive",
+        "history": [
+          {
+            "role": "user",
+            "content": "I need to archive a discussion board. I have a strict limit of 12 minutes of personal time and very little energy; complex manual analysis is beyond my capacity today. The archive structure is final, and there is no delivery deadline."
+          }
+        ],
+        "output": "Use the automatic archive process. It requires no user time and no user action.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "user_time": 4,
+          "effort": 4
+        },
+        "explanation": "Neither user time nor effort is required."
+      },
+      {
+        "name": "simple_archive",
+        "history": [
+          {
+            "role": "user",
+            "content": "I need to archive a discussion board. I have a strict limit of 12 minutes of personal time and very little energy; complex manual analysis is beyond my capacity today. The archive structure is final, and there is no delivery deadline."
+          }
+        ],
+        "output": "Press one clearly labeled archive button and confirm the destination. These simple actions take 1 minute of your own time; the system does the rest.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "user_time": 3,
+          "effort": 3
+        },
+        "explanation": "A small time share and a couple of simple actions."
+      },
+      {
+        "name": "manual_selection",
+        "history": [
+          {
+            "role": "user",
+            "content": "I need to archive a discussion board. I have a strict limit of 12 minutes of personal time and very little energy; complex manual analysis is beyond my capacity today. The archive structure is final, and there is no delivery deadline."
+          }
+        ],
+        "output": "Spend 6 minutes of your own time comparing several discussion examples and selecting their archive categories. This multi-step selection requires sustained but manageable concentration.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "user_time": 2,
+          "effort": 2
+        },
+        "explanation": "Half the time allowance and moderate manual reasoning."
+      },
+      {
+        "name": "extensive_rewrite",
+        "history": [
+          {
+            "role": "user",
+            "content": "I need to archive a discussion board. I have a strict limit of 12 minutes of personal time and very little energy; complex manual analysis is beyond my capacity today. The archive structure is final, and there is no delivery deadline."
+          }
+        ],
+        "output": "Spend 18 minutes of your own time reviewing every discussion, resolving numerous category conflicts, and performing extensive complex manual edits before archiving.",
+        "expected_rule": "conditional_preference",
+        "expected_ratings": {
+          "user_time": 1,
+          "effort": 1
+        },
+        "explanation": "Exceeds the time limit and requires substantial complex effort."
+      },
+      {
+        "name": "unconstrained_archive",
+        "history": [
+          {
+            "role": "user",
+            "content": "I have ample time and energy to archive the discussion board, with no user resource constraints. The structure is final and there is no deadline."
+          }
+        ],
+        "output": "Archive automatically. You spend no time and take no action.",
+        "expected_rule": "usual_preference",
+        "expected_ratings": {
+          "user_time": 4,
+          "effort": 4
+        },
+        "explanation": "The absence of resource pressure selects the usual effort preference."
+      }
+    ]
+  }
+]

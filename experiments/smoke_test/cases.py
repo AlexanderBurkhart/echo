@@ -1,107 +1,103 @@
-"""Five authored outputs and expected ratings for the real-LM smoke test."""
+"""Loads frozen development or holdout cases for the real-LM smoke test."""
 
 from collections.abc import Mapping
 import dataclasses
+import enum
+import hashlib
+import json
+import pathlib
 import types
 
 from conversation import history
+from user_simulator import config
+
+DATA_DIRECTORY = pathlib.Path(__file__).with_name("data")
+USERS_PER_SPLIT = 4
+CASES_PER_USER = 5
+
+
+class Split(enum.StrEnum):
+    """The development set and the separately gated holdout set."""
+
+    DEVELOPMENT = "development"
+    HOLDOUT = "holdout"
 
 
 @dataclasses.dataclass(frozen=True)
 class SmokeCase:
-    """One candidate and its smoke-only expectations, never sent to the LM."""
+    """One input and its authored expectations, never sent to the LM."""
 
     name: str
+    history: history.ConversationHistory
     output: str
+    expected_rule: str
     expected_ratings: Mapping[str, int]
+    explanation: str
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "expected_ratings",
-            types.MappingProxyType(dict(self.expected_ratings)),
-        )
+        """Freezes expected ratings for the duration of an experiment."""
+        object.__setattr__(self, "expected_ratings", types.MappingProxyType(
+            dict(self.expected_ratings)
+        ))
 
 
-EXPECTED_RULE = "prefer_speed_when_urgent"
-CONVERSATION_HISTORY = history.ConversationHistory(messages=(
-    history.Message(
-        role=history.Role.USER,
-        content=(
-            "The announcement draft is complete and approved for release. "
-            "I have the editable source document ready."
-        ),
-    ),
-    history.Message(
-        role=history.Role.ASSISTANT,
-        content="The approved draft is ready to send without additional work.",
-    ),
-    history.Message(
-        role=history.Role.USER,
-        content=(
-            "This is urgent: I must send the announcement in the next "
-            "2 minutes. Missing this deadline cancels today's launch. "
-            "The launch details are still uncertain and may change after "
-            "sending, so I need to be able to revise and send a correction. "
-            "What should I do?"
-        ),
-    ),
-))
-CASES = (
-    SmokeCase(
-        name="fast_and_adaptable",
-        output=(
-            "Send the approved announcement immediately, within the "
-            "2-minute deadline. Keep the editable source and a copy of the "
-            "sent version. Because the launch details may change, revise "
-            "the source and send a correction if new details arrive."
-        ),
-        expected_ratings={"urgency": 4, "uncertainty": 4},
-    ),
-    SmokeCase(
-        name="brief_delay_but_adaptable",
-        output=(
-            "Pause for 15 seconds to reopen the already approved draft, "
-            "although it needs no further review. Then send it within the "
-            "2-minute deadline. Keep the editable source and a copy of the "
-            "sent version. Because the launch details may change, revise "
-            "the source and send a correction if new details arrive."
-        ),
-        expected_ratings={"urgency": 3, "uncertainty": 4},
-    ),
-    SmokeCase(
-        name="longer_delay_but_adaptable",
-        output=(
-            "Wait 45 seconds before sending the already approved "
-            "announcement, just in case another idea occurs to you. "
-            "No further review is needed. Send it in the remaining "
-            "75 seconds before the deadline. Keep the editable source "
-            "and a copy of the sent version. Because the launch details "
-            "may change, revise the source and send a correction if new "
-            "details arrive."
-        ),
-        expected_ratings={"urgency": 2, "uncertainty": 4},
-    ),
-    SmokeCase(
-        name="fast_but_incomplete_corrections",
-        output=(
-            "Send the approved announcement immediately, within the "
-            "2-minute deadline. Keep the editable source and a copy of "
-            "the sent version. If the launch date changes, revise the "
-            "source and send a correction to the original recipients. "
-            "However, if other launch details change, leave those parts "
-            "of the announcement as they were and do not correct them."
-        ),
-        expected_ratings={"urgency": 4, "uncertainty": 2},
-    ),
-    SmokeCase(
-        name="delayed_and_rigid",
-        output=(
-            "Wait until tomorrow to send the announcement, even though this "
-            "misses the 2-minute deadline and cancels today's launch. Then "
-            "permanently delete the editable source and all copies. Treat "
-            "the announcement as final: ignore later changes to the launch "
-            "details and do not send corrections."
-        ),
-        expected_ratings={"urgency": 0, "uncertainty": 0},
-    ),
-)
+@dataclasses.dataclass(frozen=True)
+class UserCases:
+    """A test-only user configuration and five separately scored outputs."""
+
+    user: config.UserConfig
+    description: str
+    cases: tuple[SmokeCase, ...]
+
+    def __post_init__(self) -> None:
+        """Rejects incomplete case groups and invalid expected ratings."""
+        if len(self.cases) != CASES_PER_USER:
+            raise ValueError("Each test user requires five cases")
+        if len({case.name for case in self.cases}) != CASES_PER_USER:
+            raise ValueError("Case names must be unique within a user")
+        rules = {rule.id: rule for rule in self.user.rules}
+        for case in self.cases:
+            rule = rules[case.expected_rule]
+            active = {name for name, weight in rule.weights.items() if weight}
+            if set(case.expected_ratings) != active:
+                raise ValueError("Expectations must cover active preferences")
+            if any(type(value) is not int or value not in range(5)
+                   for value in case.expected_ratings.values()):
+                raise ValueError("Expected ratings must be integers in [0, 4]")
+            if not case.output.strip() or not case.explanation.strip():
+                raise ValueError("Cases require an output and an explanation")
+
+
+def load_cases(split: Split) -> tuple[UserCases, ...]:
+    """Loads only the requested split; callers own the holdout release gate."""
+    raw = (DATA_DIRECTORY / f"{split}.json").read_bytes()
+    manifest = json.loads((DATA_DIRECTORY / "manifest.json").read_text())
+    if hashlib.sha256(raw).hexdigest() != manifest[split]:
+        raise ValueError("Evaluation fixtures changed after they were frozen")
+    raw_groups = json.loads(raw)
+    groups = []
+    for group in raw_groups:
+        inputs = []
+        for item in group["cases"]:
+            inputs.append(SmokeCase(
+                name=item["name"],
+                history=history.ConversationHistory(messages=tuple(
+                    history.Message(
+                        role=history.Role(message["role"]),
+                        content=message["content"],
+                    ) for message in item["history"]
+                )),
+                output=item["output"],
+                expected_rule=item["expected_rule"],
+                expected_ratings=item["expected_ratings"],
+                explanation=item["explanation"],
+            ))
+        groups.append(UserCases(
+            user=config.parse_user(group["user"]),
+            description=group["description"], cases=tuple(inputs),
+        ))
+    if len(groups) != USERS_PER_SPLIT:
+        raise ValueError("Each split requires four users")
+    if len({group.user.user_id for group in groups}) != USERS_PER_SPLIT:
+        raise ValueError("User IDs must be unique within a split")
+    return tuple(groups)
