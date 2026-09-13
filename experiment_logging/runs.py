@@ -11,6 +11,8 @@ import pathlib
 from typing import Any
 import uuid
 
+from loguru import logger as log
+
 from experiment_logging import records
 from experiment_logging.data import run_records
 
@@ -18,6 +20,7 @@ REQUESTS_DIRECTORY = "requests"
 LOGS_DIRECTORY = "logs"
 MANIFEST_FILENAME = "run.json"
 JOURNAL_FILENAME = "events.jsonl"
+RUNTIME_LOG_FILENAME = "run.log"
 LOCK_FILENAME = ".run.lock"
 SCHEMA_VERSION = "run-log-v1"
 
@@ -92,6 +95,28 @@ def write_text(
 ) -> pathlib.Path:
     """Writes a component-relative text artifact and journals its location."""
     return RunLogger(run_root).write_text(component, relative_path, text)
+
+
+@contextlib.contextmanager
+def capture_logs(run_root: str | pathlib.Path) -> Iterator[None]:
+    """Saves Loguru messages from this run's context to logs/run.log.
+
+    Configure this once around a run's entry point. Components use the shared
+    Loguru logger directly; the context supplies their run identity. The file
+    sink is removed on exit without removing any caller-owned sinks.
+    """
+    run = RunLogger(run_root)
+    sink_id = log.add(
+        run.root / LOGS_DIRECTORY / RUNTIME_LOG_FILENAME,
+        filter=lambda record: record["extra"].get("run_id") == run.run_id,
+        encoding="utf-8", diagnose=False, catch=False,
+        opener=lambda path, flags: os.open(path, flags, 0o600),
+    )
+    try:
+        with log.contextualize(run_id=run.run_id):
+            yield
+    finally:
+        log.remove(sink_id)
 
 
 class RunLogger:
@@ -193,6 +218,10 @@ class RunLogger:
                 stream.write(records.serialize_canonical_json(entry) + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
+        log.bind(
+            run_id=self.run_id, component=component, request_id=request_id,
+            artifact=artifact, status=status,
+        ).debug("{}: {} ({})", component, event, status)
 
     def _get_artifact_path(
         self, component: str, relative_path: str | pathlib.Path

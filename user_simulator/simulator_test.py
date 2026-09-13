@@ -287,7 +287,10 @@ class SimulatorTest(unittest.TestCase):
         )
         score = self._score(scorer)
         self.assertGreater(score, 0)
-        self.assertIn('"extra":["a","b","c","d","e"]', judge.calls[1])
+        self.assertIn(
+            '"extra":{"0":"a","1":"b","2":"c","3":"d","4":"e"}',
+            judge.calls[1],
+        )
         saved = score_records.load_score_record(
             next(self.root.glob("requests/*/score.json"))
         )

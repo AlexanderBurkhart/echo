@@ -5,9 +5,12 @@ import dataclasses
 import json
 import pathlib
 import tempfile
+import threading
 from typing import Any
 import unittest
 from unittest import mock
+
+from loguru import logger as log
 
 from experiment_logging import records
 from experiment_logging import runs
@@ -33,6 +36,49 @@ class RunLoggerTest(unittest.TestCase):
     def _read_events(self) -> list[dict[str, Any]]:
         path = self.root / "logs" / "events.jsonl"
         return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def test_run_capture_isolates_concurrent_runs(self) -> None:
+        roots = (self.root, self.root.parent / "other")
+        barrier = threading.Barrier(2)
+
+        def write_messages(root: pathlib.Path) -> None:
+            with runs.capture_logs(root):
+                barrier.wait(timeout=5)
+                log.info("Message for {}", root.name)
+                runs.write_record(root, "training", "step.json", {"step": 1})
+
+        with futures.ThreadPoolExecutor(max_workers=2) as executor:
+            pending = [executor.submit(write_messages, root) for root in roots]
+            for result in pending:
+                result.result()
+        for root in roots:
+            content = (root / "logs" / runs.RUNTIME_LOG_FILENAME).read_text()
+            self.assertIn(f"Message for {root.name}", content)
+            other = next(item for item in roots if item != root)
+            self.assertNotIn(f"Message for {other.name}", content)
+            self.assertEqual(content.count("training: write_record"), 1)
+
+    def test_run_capture_closes_on_failure_and_preserves_other_sinks(
+        self,
+    ) -> None:
+        messages = []
+        sink_id = log.add(messages.append)
+        self.addCleanup(log.remove, sink_id)
+        with self.assertRaisesRegex(ValueError, "failed run"):
+            with runs.capture_logs(self.root):
+                log.error("Before failure")
+                raise ValueError("failed run")
+        path = self.root / "logs" / runs.RUNTIME_LOG_FILENAME
+        original = path.read_text()
+        # Explicit binding would reach a leaked sink even after context exit.
+        log.bind(run_id=self.logger.run_id).info("After capture")
+        self.assertEqual(path.read_text(), original)
+        self.assertTrue(any("After capture" in item for item in messages))
+        with runs.capture_logs(self.root):
+            log.info("Reopened run")
+        self.assertEqual(path.read_text().count("Reopened run"), 1)
+        self.assertIn("Before failure", path.read_text())
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_reopening_preserves_run_identity_and_previous_events(self) -> None:
         self.logger.log_event("training", "start_update")

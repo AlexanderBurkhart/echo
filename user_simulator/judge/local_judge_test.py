@@ -6,6 +6,7 @@ import types
 import unittest
 from unittest import mock
 
+from experiment_logging import records
 from user_simulator.judge import local_judge
 
 
@@ -50,8 +51,13 @@ class LocalLlamaJudgeTest(unittest.TestCase):
             self.assertEqual(arguments["temperature"], 0)
             self.assertEqual(arguments["max_tokens"], 1024)
             self.assertEqual(
-                arguments["response_format"], {"type": "json_object"}
+                arguments["response_format"]["type"], "json_object"
             )
+        self.assertIn("schema", arguments["response_format"])
+        self.assertEqual(
+            records.compute_digest(arguments["response_format"]),
+            records.compute_digest(judge.identity.generation["response_format"]),
+        )
         self.assertEqual(self.model.reset.call_count, 2)
         settings = self.module.Llama.call_args.kwargs
         self.assertEqual(settings["n_ctx"], 8192)

@@ -26,8 +26,12 @@ TASK_CRITERIA = (
     rating_scale.RatingScaleCriterion(
         name="user_cost",
         description=(
-            "Resource constraint intensity from budget, known expenses, "
-            "user time and effort limits."
+            "Resource constraint intensity from explicit budget, known "
+            "expenses, user time or effort limits. If none of these resource "
+            "constraints are stated, value must be null and evidence []. "
+            "A deadline alone describes urgency, not a user resource limit. "
+            "Do not assign a low default such as 25 when constraints are "
+            "unknown."
         ),
     ),
     rating_scale.RatingScaleCriterion(

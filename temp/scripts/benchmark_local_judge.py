@@ -11,6 +11,8 @@ import subprocess
 import threading
 import time
 
+from loguru import logger as log
+
 from experiment_logging import records
 from experiment_logging import runs
 from temp.scripts import benchmark_records
@@ -153,53 +155,57 @@ def _run_benchmark(settings: benchmark_records.BenchmarkConfig) -> None:
     """Runs explicitly supplied local assets and saves results or a failure."""
     root = settings.output
     root.mkdir(parents=True, exist_ok=False, mode=0o700)
-    report = benchmark_records.BenchmarkReport(preflight=_run_preflight())
-    runs.write_record(root, COMPONENT, REPORT_FILENAME, report)
-    monitor = _MemoryMonitor()
-    judge = None
-    monitor.start()
-    try:
-        monitor.set_phase(benchmark_records.MemoryPhase.LOAD)
-        judge = local_judge.LocalLlamaJudge(
-            settings.model, model_revision=settings.model_revision,
-            runtime_revision=settings.runtime_revision,
-            threads=settings.threads,
-        )
-        report.judge = judge.identity
-        report.measurements.cold_model_load_seconds = judge.load_seconds
-        users = config.load_users(settings.users)
-        scorer = simulator.Simulator(
-            users, judge, component=f"{COMPONENT}/scoring"
-        )
-        case = judge_evaluation.load_cases(settings.cases).cases[0]
-        _measure_requests(
-            scorer, users[0].user_id, case, monitor, root, report.measurements
-        )
-        if settings.validate:
-            monitor.set_phase(benchmark_records.MemoryPhase.VALIDATION)
-            result = judge_evaluation.run_evaluation(
-                judge, settings.cases, root
-            )
-            report.validation_status = result.status
-            report.human_review_status = result.human_review_status
-        report.status = benchmark_records.BenchmarkStatus.MEASURED
-    except Exception as error:
-        report.status = benchmark_records.BenchmarkStatus.FAILED
-        report.error = f"{type(error).__name__}: {error}"
-        raise
-    finally:
-        # Model resources must be released even if monitoring or logging fails.
+    with runs.capture_logs(root):
+        report = benchmark_records.BenchmarkReport(preflight=_run_preflight())
+        runs.write_record(root, COMPONENT, REPORT_FILENAME, report)
+        monitor = _MemoryMonitor()
+        judge = None
+        monitor.start()
         try:
-            report.memory_samples = monitor.stop()
-            multiplier = 1 if platform.system() == "Darwin" else 1024
-            report.process_peak_rss_bytes = (
-                resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * multiplier
+            monitor.set_phase(benchmark_records.MemoryPhase.LOAD)
+            judge = local_judge.LocalLlamaJudge(
+                settings.model, model_revision=settings.model_revision,
+                runtime_revision=settings.runtime_revision,
+                threads=settings.threads,
             )
-            runs.write_record(root, COMPONENT, REPORT_FILENAME, report)
-            _write_report(root, report)
+            report.judge = judge.identity
+            report.measurements.cold_model_load_seconds = judge.load_seconds
+            users = config.load_users(settings.users)
+            scorer = simulator.Simulator(
+                users, judge, component=f"{COMPONENT}/scoring"
+            )
+            case = judge_evaluation.load_cases(settings.cases).cases[0]
+            _measure_requests(
+                scorer, users[0].user_id, case, monitor, root,
+                report.measurements,
+            )
+            if settings.validate:
+                monitor.set_phase(benchmark_records.MemoryPhase.VALIDATION)
+                result = judge_evaluation.run_evaluation(
+                    judge, settings.cases, root
+                )
+                report.validation_status = result.status
+                report.human_review_status = result.human_review_status
+            report.status = benchmark_records.BenchmarkStatus.MEASURED
+        except Exception as error:
+            report.status = benchmark_records.BenchmarkStatus.FAILED
+            report.error = f"{type(error).__name__}: {error}"
+            log.error("Benchmark failed: {}", report.error)
+            raise
         finally:
-            if judge is not None:
-                judge.close()
+            # Release the model even if monitoring or logging fails.
+            try:
+                report.memory_samples = monitor.stop()
+                multiplier = 1 if platform.system() == "Darwin" else 1024
+                report.process_peak_rss_bytes = (
+                    resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                    * multiplier
+                )
+                runs.write_record(root, COMPONENT, REPORT_FILENAME, report)
+                _write_report(root, report)
+            finally:
+                if judge is not None:
+                    judge.close()
 
 
 def _write_report(
@@ -247,7 +253,9 @@ def _run_cli() -> None:
                         help="Run 12 cases, three uncached repetitions")
     args = parser.parse_args()
     if args.preflight:
-        print(records.serialize_canonical_json(_run_preflight()))
+        log.info("Preflight: {}", records.serialize_canonical_json(
+            _run_preflight()
+        ))
         return
     if not args.model or not args.model_revision or not args.runtime_revision:
         parser.error("Existing model and exact model/runtime revisions needed")

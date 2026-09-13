@@ -28,10 +28,14 @@ DEFAULT_RATING_CRITERIA = (
         ),
         "Leaves major known uncertainties unaddressed and costly to revise.",
         "Handles some uncertainties but leaves meaningful adaptation gaps.",
-        "Handles relevant unknowns and preserves most useful adaptability.",
         (
-            'Addresses relevant unknowns and preserves adaptability '
-            'without unsupported certainty.'
+            "Provides a way to revise decisions or outputs, but leaves a "
+            "minor stated change or requirement without a way to adapt."
+        ),
+        (
+            "Explicitly acknowledges stated uncertainty and gives a usable "
+            "way to revise decisions or outputs if information changes, "
+            "without claiming that unknowns are settled."
         ),
     )),
     rating_scale.RatingAnchoredCriterion(name="money", anchors=(

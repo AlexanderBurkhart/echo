@@ -2,6 +2,7 @@
 
 import dataclasses
 import hashlib
+import json
 import pathlib
 import platform
 import time
@@ -14,6 +15,7 @@ from user_simulator.data import judge_identity
 from user_simulator.judge import runtime_settings
 
 HASH_BLOCK_BYTES = 1024 * 1024
+RESPONSE_SCHEMA_PATH = pathlib.Path(__file__).with_name("response_schema.json")
 
 
 def _compute_file_sha256(path: str | pathlib.Path) -> str:
@@ -75,7 +77,12 @@ class LocalLlamaJudge:
         )
         self._generation = dict(
             runtime_settings.GENERATION_OPTIONS,
-            response_format={"type": runtime_settings.RESPONSE_FORMAT},
+            response_format={
+                "type": runtime_settings.RESPONSE_FORMAT,
+                "schema": json.loads(
+                    RESPONSE_SCHEMA_PATH.read_text(encoding="utf-8")
+                ),
+            },
         )
         started = time.perf_counter()
         self._model = llama_cpp.Llama(
