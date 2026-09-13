@@ -445,6 +445,61 @@ class SimulatorTest(unittest.TestCase):
             set(invalid_entries),
         )
 
+    def test_duplicate_cache_keys_request_and_reuse_replacement(self) -> None:
+        for kind, response in (
+            (judgments.JudgmentKind.TASK, self.task_raw),
+            (judgments.JudgmentKind.OUTPUT, self.output_raw),
+        ):
+            judge = _SequenceJudge([
+                self.task_raw, self.output_raw, response, response,
+            ])
+            scorer = simulator.Simulator([self.user], judge)
+            baseline = self._score(scorer)
+            path = next(self.root.glob(f"{kind.value}_cache/*.json"))
+            valid = path.read_text(encoding="utf-8")
+            invalid_entries = (
+                '{"ratings":{},' + valid[1:],
+                valid.replace('"urgency":{', '"urgency":{"value":0,', 1),
+            )
+            for index, raw in enumerate(invalid_entries):
+                with self.subTest(kind=kind, index=index):
+                    path.write_text(raw, encoding="utf-8")
+                    self.assertEqual(self._score(scorer), baseline)
+                    saved_records = (
+                        score_records.load_score_record(record_path)
+                        for record_path in self.root.glob(
+                            "requests/*/score.json"
+                        )
+                    )
+                    if kind is judgments.JudgmentKind.TASK:
+                        saved = next(
+                            item for item in saved_records
+                            if item.task_invalid_cache == raw
+                        )
+                        self.assertIn(
+                            "Duplicate JSON key", saved.task_cache_error
+                        )
+                        self.assertFalse(saved.task_cache_hit)
+                        self.assertTrue(saved.output_cache_hit)
+                        self.assertEqual(saved.task_lm_calls[0].raw, response)
+                    else:
+                        saved = next(
+                            item for item in saved_records
+                            if item.output_invalid_cache == raw
+                        )
+                        self.assertIn(
+                            "Duplicate JSON key", saved.output_cache_error
+                        )
+                        self.assertFalse(saved.output_cache_hit)
+                        self.assertTrue(saved.task_cache_hit)
+                        self.assertEqual(saved.output_lm_calls[0].raw, response)
+                    self.assertEqual(len(judge.calls), 3 + index)
+                    self.assertEqual(self._score(scorer), baseline)
+                    self.assertEqual(len(judge.calls), 3 + index)
+            # Give the next judgment kind a fresh pair of caches.
+            for cache_path in self.root.glob("*_cache/*.json"):
+                cache_path.unlink()
+
     def test_invalid_cache_recovery_uses_normal_lm_retry_limit(self) -> None:
         judge = _SequenceJudge([
             self.task_raw, self.output_raw, "bad", "bad", "bad",

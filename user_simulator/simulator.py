@@ -3,7 +3,6 @@
 import collections
 from collections.abc import Sequence
 import datetime
-import json
 import pathlib
 import time
 import uuid
@@ -142,9 +141,7 @@ class Simulator:
             raw = None
             try:
                 raw = cache_path.read_text(encoding="utf-8")
-                cached = json.loads(raw)
-                if not isinstance(cached, dict):
-                    raise ValueError("Cached LM judgment must be an object")
+                cached = judging.decode_lm_json(raw)
                 # Remove provenance before validating the cached LM response.
                 source_record = cached.pop("source_record", None)
                 if not isinstance(source_record, str) or not source_record:

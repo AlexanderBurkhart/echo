@@ -1,11 +1,9 @@
 """Typed request records and cache identities for simulator scoring."""
 
-from collections.abc import Mapping
 import dataclasses
 import enum
 import json
 import pathlib
-from typing import Any
 
 from conversation import history
 from user_simulator import config
@@ -70,8 +68,7 @@ class ScoreRecord:
     user_id: str
     history: history.ConversationHistory
     output: str
-    # Older archived test runs recorded backend-specific identity maps.
-    judge: judge_identity.LocalJudgeIdentity | Mapping[str, Any]
+    judge: judge_identity.LocalJudgeIdentity
     prompt_hash: str
     user_config: config.UserConfig
     task_cache_key: str
@@ -101,8 +98,7 @@ def load_score_record(path: pathlib.Path) -> ScoreRecord:
     """Decodes a persisted scoring record at the JSON input boundary."""
     value = json.loads(path.read_text(encoding="utf-8"))
     value["status"] = ScoreStatus(value["status"])
-    if "model_sha256" in value["judge"]:
-        value["judge"] = judge_identity.LocalJudgeIdentity(**value["judge"])
+    value["judge"] = judge_identity.LocalJudgeIdentity(**value["judge"])
     for field in ("task_lm_calls", "output_lm_calls"):
         value[field] = [LMCallResult(**call) for call in value.get(field, [])]
     value.pop("_record", None)

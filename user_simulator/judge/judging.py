@@ -84,6 +84,26 @@ def _reject_constant(value: str) -> None:
     raise MalformedLMJudgmentError(f"Nonfinite JSON number: {value!r}")
 
 
+def decode_lm_json(raw: str) -> dict[str, Any]:
+    """Decodes fresh or cached LM JSON before fields can be discarded.
+
+    Raises:
+        MalformedLMJudgmentError: The response is not a JSON object, contains
+            duplicate keys, or contains nonfinite JSON constants.
+    """
+    try:
+        data = json.loads(
+            raw,
+            object_pairs_hook=_build_unique_object,
+            parse_constant=_reject_constant,
+        )
+    except (ValueError, TypeError) as error:
+        raise MalformedLMJudgmentError(str(error)) from error
+    if not isinstance(data, dict):
+        raise MalformedLMJudgmentError("LM judgment must be an object")
+    return data
+
+
 def parse_lm_judgment(
     raw: str,
     kind: judgments.JudgmentKind,
@@ -104,14 +124,7 @@ def parse_lm_judgment(
     Raises:
         MalformedLMJudgmentError: JSON, schema, ranges, or quotes are invalid.
     """
-    try:
-        data = json.loads(
-            raw,
-            object_pairs_hook=_build_unique_object,
-            parse_constant=_reject_constant,
-        )
-    except (ValueError, TypeError) as error:
-        raise MalformedLMJudgmentError(str(error)) from error
+    data = decode_lm_json(raw)
     if kind is judgments.JudgmentKind.TASK:
         _check_keys(data, ("ratings", "quantities"))
         _check_keys(data["quantities"], ())
