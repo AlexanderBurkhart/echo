@@ -10,7 +10,6 @@ from experiment_logging import records
 from user_simulator import config
 from user_simulator import test_utils
 from user_simulator.judge import prompts
-from user_simulator.judge.ratings import output_definitions
 
 
 class ConfigTest(unittest.TestCase):
