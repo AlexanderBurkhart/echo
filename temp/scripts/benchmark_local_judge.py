@@ -109,21 +109,22 @@ def _run_preflight() -> benchmark_records.PreflightReport:
 
 def _measure_requests(
     scorer: simulator.Simulator,
-    user_id: str,
+    user: config.UserConfig,
     case: validation_records.ComparisonCase,
     monitor: _MemoryMonitor,
     run_root: pathlib.Path,
     measurements: benchmark_records.BenchmarkMeasurements,
 ) -> None:
-    """Records inference timing, preserving completed scores if a call fails."""
+    """Times a fresh-cache run, then four outputs reusing its task cache."""
+    output_calls = len(user.rating_criteria)
     monitor.set_phase(benchmark_records.MemoryPhase.SINGLE_REQUEST)
     measurements.single_request = benchmark_records.RequestTiming(
-        expected_judge_calls_without_retries=2,
+        expected_judge_calls_without_retries=1 + output_calls,
     )
     started = time.perf_counter()
     try:
         measurements.single_request.scores.append(scorer.score(
-            run_root=run_root, user_id=user_id,
+            run_root=run_root, user_id=user.user_id,
             conversation_history=case.history, output=case.first.output,
         ))
     finally:
@@ -136,13 +137,15 @@ def _measure_requests(
         "Leave the prepared notice waiting for several days.",
     )
     measurements.four_outputs_cached_history = benchmark_records.RequestTiming(
-        expected_judge_calls_without_retries=4,
+        expected_judge_calls_without_retries=(
+            len(set(outputs) - {case.first.output}) * output_calls
+        ),
     )
     started = time.perf_counter()
     try:
         for output in outputs:
             measurements.four_outputs_cached_history.scores.append(scorer.score(
-                run_root=run_root, user_id=user_id,
+                run_root=run_root, user_id=user.user_id,
                 conversation_history=case.history, output=output,
             ))
     finally:
@@ -176,7 +179,7 @@ def _run_benchmark(settings: benchmark_records.BenchmarkConfig) -> None:
             )
             case = judge_evaluation.load_cases(settings.cases).cases[0]
             _measure_requests(
-                scorer, users[0].user_id, case, monitor, root,
+                scorer, users[0], case, monitor, root,
                 report.measurements,
             )
             if settings.validate:
@@ -247,7 +250,7 @@ def _run_cli() -> None:
         ),
     )
     parser.add_argument("--output", type=pathlib.Path,
-                        default=pathlib.Path("artifacts/mac-judge-benchmark"))
+                        default=pathlib.Path("artifacts/judge-benchmark"))
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--validate", action="store_true",
                         help="Run 12 cases, three uncached repetitions")

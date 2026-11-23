@@ -71,8 +71,6 @@ class PreflightReport:
     python: str
     binding_installed: bool
     hardware: dict[str, CommandResult]
-    target: str = "M2 Mac mini, 16 GB unified memory"
-    target_verified: bool = False
     note: str = "Preflight only; no inference or model availability claim."
 
 
@@ -111,8 +109,10 @@ class BenchmarkReport:
     human_review_status: str | None = None
     memory_samples: list[MemorySample] = dataclasses.field(default_factory=list)
     process_peak_rss_bytes: int | None = None
-    candidate: str = "Gemma 3 12B IT QAT Q4_0 (provisional; verify the file)"
     limitations: tuple[str, ...] = (
+        "Expected calls assume an initially empty cache and no retries; "
+        "the four-output batch reuses the first request's history and "
+        "any repeated outputs. Counts are expectations, not measurements.",
         "Cold model construction, not guaranteed cold filesystem cache.",
         "RSS is not total memory pressure; OS diagnostics are saved.",
         "Memory sampling has overhead and may miss short peaks.",
