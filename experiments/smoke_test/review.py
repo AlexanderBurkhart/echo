@@ -78,12 +78,14 @@ def review_output(
             )
         if rating.value is None:
             failures.append(f"Cannot manually calculate unknown {name} rating.")
-            continue
-        value = rating.value / 4
-        if not math.isclose(record.result.component_values[name], value):
-            failures.append(f"Logged mapped value for {name} is incorrect.")
     actual_weights = record.result.weights
     actual_ratings = record.output_judgment.ratings
+    for name in actual_weights:
+        rating = actual_ratings[name]
+        if rating.value is not None and not math.isclose(
+            record.result.component_values[name], rating.value / 4,
+        ):
+            failures.append(f"Logged mapped value for {name} is incorrect.")
     if all(actual_ratings[name].value is not None for name in actual_weights):
         terms = [f"{weight} * ({actual_ratings[name].value}/4)"
                  for name, weight in actual_weights.items()]

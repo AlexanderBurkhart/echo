@@ -109,6 +109,52 @@ class SmokeReviewTest(unittest.TestCase):
             failures,
         )
 
+    def test_wrong_rule_with_different_criteria_reports_mismatch(self) -> None:
+        user = self.record.user_config
+        self.record.user_config = dataclasses.replace(
+            user, rules=(
+                dataclasses.replace(user.rules[0], weights={"urgency": 1.0}),
+                user.rules[1],
+            ),
+        )
+        self.record.task_judgment.ratings["urgency"].value = 10
+        self.record.output_judgment.ratings["uncertainty"].value = 3
+        self.record.result = engine.calculate_preference_score(
+            self.record.user_config, self.record.task_judgment.ratings,
+            self.record.output_judgment.ratings,
+        )
+        report, failures = review.review_output(self.case, self.record, 100)
+        self.assertIn("Selected rule: always", report)
+        self.assertIn("LM uncertainty rating was 3; expected 4.", failures)
+        self.assertIn(
+            f"Expected rule {self.case.expected_rule} was not selected.",
+            failures,
+        )
+        self.assertIn(
+            "Logged weights differ from the expected config rule.", failures
+        )
+        self.assertNotIn(
+            "Returned score differs from manual arithmetic.", failures
+        )
+
+    def test_checks_mapping_for_criteria_only_in_selected_rule(self) -> None:
+        user = self.record.user_config
+        self.record.user_config = dataclasses.replace(
+            user, rules=(
+                dataclasses.replace(user.rules[0], weights={"effort": 1.0}),
+                user.rules[1],
+            ),
+        )
+        self.record.task_judgment.ratings["urgency"].value = 10
+        self.record.output_judgment.ratings["effort"].value = 4
+        self.record.result = engine.calculate_preference_score(
+            self.record.user_config, self.record.task_judgment.ratings,
+            self.record.output_judgment.ratings,
+        )
+        self.record.result.component_values["effort"] = 0
+        _, failures = review.review_output(self.case, self.record, 100)
+        self.assertIn("Logged mapped value for effort is incorrect.", failures)
+
     def test_reports_unknown_rating_instead_of_silently_accepting_it(
         self,
     ) -> None:
