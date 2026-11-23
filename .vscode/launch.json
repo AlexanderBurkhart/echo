@@ -8,7 +8,32 @@
             "module": "experiments.smoke_test.main",
             "python": "${workspaceFolder}/.venv/bin/python",
             "cwd": "${workspaceFolder}",
-            "console": "integratedTerminal"
+            "console": "integratedTerminal",
+            "args": [
+                "--model",
+                "${input:judgeModel}",
+                "--model-revision",
+                "${input:judgeModelRevision}",
+                "--runtime-revision",
+                "${input:judgeRuntimeRevision}"
+            ]
+        }
+    ],
+    "inputs": [
+        {
+            "id": "judgeModel",
+            "type": "promptString",
+            "description": "Existing local GGUF path (see docs/model-setup.md)"
+        },
+        {
+            "id": "judgeModelRevision",
+            "type": "promptString",
+            "description": "Source repository@revision for that model"
+        },
+        {
+            "id": "judgeRuntimeRevision",
+            "type": "promptString",
+            "description": "Actual llama.cpp revision and build provenance"
         }
     ]
 }
